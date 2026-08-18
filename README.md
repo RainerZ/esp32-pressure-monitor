@@ -12,9 +12,10 @@ That combination is the point of the project: MQTT gives you the slow, cheap,
 always-on data stream, while XCP lets you connect at any moment and watch the
 raw signal at full rate without changing the firmware or restarting anything.  
   
-So XCP allows you to observe transient pressure peaks in the pipe system, caused by opening and closing taps and valves.  
+So XCP allows you to observe transient pressure peaks in the pipe system, caused by opening and closing taps and valves or pressure peaks from the outside. You may run the XCP measurement as long as needed,but it produces a lot of data. 
 MQTT can record long term pressure changes in your home automation system.  
-Longer term pressure monitoring is usefull to check that incoming pressure regulators, volume expansion tanks and overpressure valves are functional.  
+Longer term, slow sampling rate pressure monitoring is usefull to check that pressure regulators, volume expansion tanks and overpressure valves are functional.  
+
 
 ![Demo Board](ESP32.png)
 
@@ -95,6 +96,12 @@ xcpclient --version          # expect 3.0.1 or newer
 
 For the full option reference see
 [tools/xcpclient/README.md](https://github.com/RainerZ/XCPlite/blob/V2.1.10/tools/xcpclient/README.md).
+
+Notes about xcpclient:
+
+The A2L needs XCP_104.aml beside it. Moving pressure_monitor.a2l somewhere else without that file gives a bare 'Could not load A2L file' with no hint why.
+
+EPK mismatch is a warning, not an error. Make sure to regenerate the A2L after every firmware change.  
 
 
 ## Measurement and calibration
