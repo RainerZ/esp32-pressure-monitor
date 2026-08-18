@@ -26,9 +26,11 @@ DEFAULT_REPO="https://github.com/RainerZ/XCPlite"
 DEFAULT_REF="V2.1.10"
 
 # Public API headers, copied to xcplite/inc/
+# a2l.h / a2l.hpp are deliberately absent: they are only included behind
+# OPTION_SHM_MODE and OPTION_ENABLE_A2L_GENERATOR, both disabled by the rtos
+# configuration. Every file listed here is opened by the compiler on a real
+# build; verify with the .d dependency files under .pio/build/*/xcplite/.
 INC_FILES=(
-    a2l.h
-    a2l.hpp
     xcplib.h
     xcplib.hpp
 )

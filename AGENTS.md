@@ -18,6 +18,17 @@
   upstream and re-run `tools/update_xcplite.sh`.
 - Keep `XCPLITE_SOURCES` in `extra_script.py` in sync with the manifest in
   `tools/update_xcplite.sh`.
+- The manifest is minimal: every file in it is opened by the compiler on a real
+  build. After an upstream bump, re-derive the set from the dependency files
+  rather than guessing:
+
+  ```bash
+  cat .pio/build/*/**/*.d | tr ' \\' '\n\n' \
+    | grep -o "xcplite/\(inc\|src\)/[A-Za-z0-9_.]*" | sed 's|^xcplite/||' | sort -u
+  ```
+
+  Compare against `find xcplite/inc xcplite/src -type f`. Anything vendored but
+  not listed is dead weight; a missing file breaks the build immediately.
 - `xcp_cals`, `xcp_evts`, `xcp_epk` and `xcp_meta` carry the metadata for offline
   A2L generation. Keep them in flash and retained by the linker. `xcpclient`
   locates `xcp_epk` and `xcp_meta` by ELF section name, but `xcp_cals` and
