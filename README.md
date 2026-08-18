@@ -55,7 +55,6 @@ a two channel scope. Connect both probe grounds to GND.
 ## Quick start
 
 ```bash
-tools/update_xcplite.sh            # fetch the XCPlite sources, once per clone
 cp src/wlan.h.example src/wlan.h   # then edit in your SSID and password
 pio run --target upload
 pio device monitor                 # note the IP address the board reports
@@ -216,7 +215,7 @@ src/
   mqtt.cpp                MQTT publisher task
   clock64.c               64 bit microsecond DAQ clock
   wlan.h.example          Template for the gitignored src/wlan.h
-xcplite/                  XCPlite subset, fetched by the script below (gitignored)
+xcplite/                  Vendored XCPlite subset (22 files), see below
 tools/update_xcplite.sh   Refreshes xcplite/ from an XCPlite repository
 docs/LINKER_SECTIONS.md   Reference notes on the XCP flash sections
 docs/CALIBRATION_PERSISTENCE.md  Deferred design discussion, not implemented
@@ -236,22 +235,21 @@ it before touching `extra_linker_script.py`.
 them into a static library at build time and puts `xcplite/inc` and `xcplite/src`
 on the include path.
 
-`xcplite/` is **gitignored**, so the snapshot is not carried in this repository's
-history. A fresh clone therefore has to fetch it once before the first build:
+The snapshot is committed to this repository, so a fresh clone builds without
+fetching anything and without network access. `xcplite/VERSION` records the exact
+upstream commit it came from.
 
-```bash
-tools/update_xcplite.sh
-```
+The subset is minimal: all 22 files are opened by the compiler on a real build.
+It is not a copy of XCPlite — the A2L generator, persistence, shared memory and
+the 64-bit queue variants are all disabled by the rtos configuration and absent.
 
-Until that runs, `pio run` stops immediately with
+Vendoring rather than submoduling keeps the repository self-contained, avoids a
+`clone --recursive` step, and keeps library code visible to the debugger. The
+cost is that XCPlite sources live in this repository's history and updates are a
+script run rather than a `git pull`.
+
+If `xcplite/` is ever missing, `pio run` stops immediately with
 `Vendored XCPlite sources not found at .../xcplite/src. Run tools/update_xcplite.sh`.
-
-The upstream ref is pinned by `DEFAULT_REF` in `tools/update_xcplite.sh`, which
-*is* tracked, so the pin survives a clone even though the sources do not. After
-fetching, `xcplite/VERSION` records the exact commit that was used.
-
-Fetching sources rather than submoduling keeps upstream code out of this
-repository's history while still letting the debugger step into library code.
 
 Refresh it with:
 

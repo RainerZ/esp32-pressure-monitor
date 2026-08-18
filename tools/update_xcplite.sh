@@ -48,10 +48,8 @@ SRC_FILES=(
 
     cal.h
     dbg_print.h
-    persistence.h
     platform.h
     queue.h
-    shm.h
     xcp.h
     xcp_cfg.h
     xcpethserver.h

@@ -12,14 +12,12 @@
 - Build with `pio run` from the project root.
 - Keep the XCPlite `rtos` configuration: `_FREE_RTOS`,
   `XCPLITE_CONFIGURATION=rtos`, `XCPLIB_CFG_OVERRIDE="xcplib_rtos_cfg.h"`.
-- `xcplite/` is gitignored and not part of this repository's history. A fresh
-  clone must run `tools/update_xcplite.sh` once before the first build.
 - Never edit files under `xcplite/` by hand. They are a snapshot; change them
   upstream and re-run `tools/update_xcplite.sh`.
 - Keep `XCPLITE_SOURCES` in `extra_script.py` in sync with the manifest in
   `tools/update_xcplite.sh`.
-- The manifest is minimal: every file in it is opened by the compiler on a real
-  build. After an upstream bump, re-derive the set from the dependency files
+- The manifest is minimal: all 22 files in it are opened by the compiler on a
+  real build, verified against the dependency data. After an upstream bump, re-derive the set from the dependency files
   rather than guessing:
 
   ```bash

@@ -1,0 +1,6 @@
+# Vendored XCPlite snapshot. Regenerate with tools/update_xcplite.sh.
+repo: /Users/rainer/git/XCPlite-RainerZ
+ref: V2.1.10
+commit: 854c17ed1006b75d2f35772ee6b19220ad3271b7
+date: 2026-08-18T11:42:22+02:00
+subject: Only include shm.h and persistence.h where their contents are enabled
