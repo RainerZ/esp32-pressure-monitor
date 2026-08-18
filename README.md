@@ -20,6 +20,7 @@ Longer term pressure monitoring is usefull to check that incoming pressure regul
 
 Derived from the `freertos_esp32_demo` example of [XCPlite](https://github.com/RainerZ/XCPlite).
 
+
 ## Hardware
 
 - An ESP32-S3 board compatible with `lilygo-t-display-s3`, or an adapted `platformio.ini`.
@@ -45,21 +46,55 @@ whatever the configured range.
 
 ## Quick start
 
+Compile
+
 ```bash
 cp src/wlan.h.example src/wlan.h   # then edit in your SSID and password
 pio run --target upload
-pio device monitor                 # note the IP address the board reports
+pio device monitor                 # note the IP address the board reports and fill in below
 ```
 
-Generate the A2L file from the firmware ELF and connect:
+
+Start a measurement with the XCPlite xcpclient tool - just the pressure variable and print to a csv file.  
+xcpclient works with ELF or A2L files.  
+
 
 ```bash
-xcpclient --offline --udp --dest-addr <esp32-ip> --elf .pio/build/lilygo-t-display-s3/firmware.elf --a2l CANape/pressure_monitor.a2l --elf-unit-filter pressure_monitor
+xcpclient --udp --dest-addr 192.168.0.154  --elf .pio/build/lilygo-t-display-s3/firmware.elf --mea '^pressure$' --csv pressure_monitor.csv
 ```
 
+
+Generate the A2L file from the firmware ELF for CANape or other XCP/A2L compliant tools:
+
 ```bash
-xcpclient --udp --dest-addr <esp32-ip> --a2l CANape/pressure_monitor.a2l --mea pressure
+xcpclient --offline --udp --dest-addr 192.168.0.154 --elf .pio/build/lilygo-t-display-s3/firmware.elf --a2l CANape/pressure_monitor.a2l --elf-unit-filter pressure_monitor
 ```
+
+Start a test measurement with xcpclient and the A2L file and print to terminal
+
+```bash
+xcpclient --udp --dest-addr 192.168.0.154 --a2l CANape/pressure_monitor.a2l --mea pressure --verbose 2
+```
+
+
+### Getting xcpclient
+
+`xcpclient` is a simple command line XCP client from [XCPlite](https://github.com/RainerZ/XCPlite).
+This project uses it for two jobs: generating the A2L from the firmware ELF, and recording measurements to CSV. 
+Note that xcpclient is not a generic A2L creator tool, it works with XCPlite only.  
+
+xcpclient is a Rust program, so you need a Rust toolchain (**1.85 or newer**; install from [rustup.rs](https://rustup.rs)):
+
+```bash
+git clone https://github.com/RainerZ/XCPlite
+cargo install --path XCPlite/tools/xcpclient
+xcpclient --version          # expect 3.0.1 or newer
+```
+
+`cargo install` puts the binary in `~/.cargo/bin`, which rustup adds to your `PATH`.  
+
+For the full option reference see
+[tools/xcpclient/README.md](https://github.com/RainerZ/XCPlite/blob/V2.1.10/tools/xcpclient/README.md).
 
 
 ## Measurement and calibration
@@ -84,8 +119,6 @@ Calibration parameters in the `parameters` segment, writable live over XCP:
 | `slow_task_period_ms` | ms | 2 |
 | `mqtt_publish_period_ms` | ms | `MQTT_PUBLISH_PERIOD_MS`, default 1000 (clamped to 100 … 3600000) |
 | `min_max_reset` | | 0 — write any *different* value to restart min/max recording |
-| `counter_max` | | 1000 |
-| `amplitude` | bar | 1.0 (fallback sine generator only) |
 | `sensor_voltage_point1` / `pressure_point1` | V / bar | 0.0 / 0.0 |
 | `sensor_voltage_point2` / `pressure_point2` | V / bar | 1.0 / 1.0 |
 
@@ -493,8 +526,6 @@ The XCP server listens on UDP port 5555. A basic connection test:
 xcpclient --udp --dest-addr <esp32-ip>
 ```
 
-The A2L upload error can be ignored; the FreeRTOS build does not support
-on-target A2L generation or upload.
 
 
 ## Licence

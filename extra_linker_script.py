@@ -1,6 +1,21 @@
 from pathlib import Path
+import configparser
+import re
 
 Import("env")
+
+project_dir = Path(env.subst("$PROJECT_DIR"))
+
+
+def has_define(name):
+    """True when name is defined via build_flags."""
+    config = configparser.ConfigParser()
+    config.read(project_dir / "platformio.ini")
+    if "env:lilygo-t-display-s3" in config:
+        build_flags = config.get("env:lilygo-t-display-s3", "build_flags", fallback="")
+        if re.search(rf"-D{name}(?:[=\s\n]|$)", build_flags):
+            return True
+    return False
 
 build_dir = Path(env.subst("$BUILD_DIR"))
 generated_sections = build_dir / "sections.ld"
@@ -42,7 +57,9 @@ xcp_sections = """    __start_xcp_cals = ABSOLUTE(.);
 # application crashes immediately on boot:
 #   E boot: Image contains multiple DROM segments. Only the last one will be mapped.
 named_sections_marker = "  _flash_rodata_align = ALIGNOF(.flash.rodata);\n"
-named_sections = """  xcp_epk : ALIGN(1)
+named_sections = ""
+if has_define("OPTION_XCP"):
+    named_sections = """  xcp_epk : ALIGN(1)
   {
     KEEP(*(xcp_epk))
     . = ALIGN(8);
@@ -74,7 +91,9 @@ env.Depends("$BUILD_DIR/${PROGNAME}.elf", str(generated_sections))
 # The gap that this script must not reintroduce is invisible until the board
 # fails to boot, so assert contiguity on every build. Sections are read straight
 # out of the ELF, which avoids depending on a toolchain binary being on PATH.
-DROM_SECTIONS = [".flash.appdesc", ".flash.rodata", "xcp_epk", "xcp_meta"]
+DROM_SECTIONS = [".flash.appdesc", ".flash.rodata"]
+if has_define("OPTION_XCP"):
+    DROM_SECTIONS.extend(["xcp_epk", "xcp_meta"])
 
 
 def _elf_sections(path):

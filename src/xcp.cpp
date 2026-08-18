@@ -7,13 +7,14 @@
 // The whole file compiles away without OPTION_XCP, and extra_script.py then
 // also skips building the XCPlite sources entirely.
 
-#include "xcp.h"
-
 #ifdef OPTION_XCP
 
 #include <stdio.h>
 
 #include "esp_timer.h"
+
+#include "xcp.h" 
+
 
 // Hash of the build inputs, written into $BUILD_DIR by extra_script.py
 #include "epk_generated.h"

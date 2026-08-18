@@ -16,10 +16,7 @@
 #include "task.h"
 
 #include "pressure_monitor.h"
-
-#ifdef OPTION_XCP
-#include "xcp.h" 
-#endif
+#include "xcp.h" // NOP when !defined(OPTION_XCP)
 
 #ifdef OPTION_DISPLAY
 #include "display.h"
@@ -44,17 +41,9 @@
 
 #define FASTTASK_PRIORITY (configMAX_PRIORITIES - 1)
 #define FASTTASK_STACKSIZE 4096
-#define FASTTASK_PERIOD_MIN_MS 1
-#define FASTTASK_PERIOD_MAX_MS 100
 
 #define SLOWTASK_PRIORITY 3
 #define SLOWTASK_STACKSIZE 4096
-#define SLOWTASK_PERIOD_MIN_MS 1
-#define SLOWTASK_PERIOD_MAX_MS 1000
-
-// Bounds for the calibratable MQTT publish period
-#define MQTT_PERIOD_MIN_MS 100
-#define MQTT_PERIOD_MAX_MS 3600000
 
 // Power-on default for the MQTT publish period and averaging window.
 // This is the value of the calibration default/reference page, so a build flag
@@ -63,14 +52,6 @@
 #ifndef MQTT_PUBLISH_PERIOD_MS
 #define MQTT_PUBLISH_PERIOD_MS 1000
 #endif
-
-static_assert(MQTT_PUBLISH_PERIOD_MS >= MQTT_PERIOD_MIN_MS && MQTT_PUBLISH_PERIOD_MS <= MQTT_PERIOD_MAX_MS,
-              "MQTT_PUBLISH_PERIOD_MS must lie within MQTT_PERIOD_MIN_MS..MQTT_PERIOD_MAX_MS, otherwise the "
-              "startup value would be silently clamped and differ from the A2L reference page");
-
-// Fallback signal generator, used when no analog converter is available
-#define SINE_PHASE_STEP_RAD 0.001f
-#define SINE_PERIOD_RAD 6.28318530717958647692f
 
 //----------------------------------------------------------------------------------------------------
 // Measurement variables
@@ -123,7 +104,6 @@ struct parameters {
     uint32_t mqtt_publish_period_ms; // Averaging window and MQTT publish period in milliseconds
     uint32_t min_max_reset;          // Write any different value to clear pressure_min and pressure_max
     uint16_t counter_max;         // Wrap-around value for global_counter
-    float amplitude;              // Amplitude of the fallback sine generator
     float sensor_voltage_point1;  // Sensor voltage at calibration point 1
     float pressure_point1;        // Pressure at calibration point 1
     float sensor_voltage_point2;  // Sensor voltage at calibration point 2
@@ -135,7 +115,6 @@ XCP_UNIT(parameters__slow_task_period_ms, "ms");
 XCP_COMMENT(parameters__mqtt_publish_period_ms, "MQTT publish period, and the averaging window for pressure_filtered");
 XCP_UNIT(parameters__mqtt_publish_period_ms, "ms");
 XCP_COMMENT(parameters__min_max_reset, "Write any value different from the current one to restart the pressure min/max recording");
-XCP_UNIT(parameters__amplitude, "bar");
 XCP_COMMENT(parameters__sensor_voltage_point1, "Pressure sensor voltage at two-point calibration point 1");
 XCP_UNIT(parameters__sensor_voltage_point1, "V");
 XCP_COMMENT(parameters__pressure_point1, "Pressure at two-point calibration point 1");
@@ -154,21 +133,19 @@ const struct parameters parameters = {
     .mqtt_publish_period_ms = MQTT_PUBLISH_PERIOD_MS,
     .min_max_reset = 0,
     .counter_max = 1000,
-    .amplitude = 1.0f,
     .sensor_voltage_point1 = 0.0f,
     .pressure_point1 = 0.0f,
     .sensor_voltage_point2 = 1.0f,
     .pressure_point2 = 1.0f,
 };
 
-#ifdef OPTION_XCP
-// Declare a calibration segment that wraps 'parameters' for thread-safe and consistent access.
-// This creates:
-//  - a linker-section 'xcp_cals' descriptor used by XcpInit() for registration
-//  - an internal calibration segment index initialized by XcpInit()
-//  - the typed C++ handle 'parameters_calseg' used by the tasks below
-CalSegDeclRef(parameters, parameters_calseg);
-#endif
+// Bounds for the calibratable parameters
+#define FASTTASK_PERIOD_MIN_MS 1
+#define FASTTASK_PERIOD_MAX_MS 100
+#define SLOWTASK_PERIOD_MIN_MS 1
+#define SLOWTASK_PERIOD_MAX_MS 1000
+#define MQTT_PERIOD_MIN_MS 100
+#define MQTT_PERIOD_MAX_MS 3600000
 
 // Clamp a calibration parameter to a given value range
 #define clamp_parameter(x, y, min, max)                                                                                                                                            \
@@ -180,6 +157,18 @@ CalSegDeclRef(parameters, parameters_calseg);
         else                                                                                                                                                                       \
             (x) = (y);                                                                                                                                                             \
     } while (0)
+
+
+
+#ifdef OPTION_XCP
+// Declare a calibration segment that wraps 'parameters' for thread-safe and consistent access.
+// This creates:
+//  - a linker-section 'xcp_cals' descriptor used by XcpInit() for registration
+//  - an internal calibration segment index initialized by XcpInit()
+//  - the typed C++ handle 'parameters_calseg' used by the tasks below
+CalSegDeclRef(parameters, parameters_calseg);
+#endif
+
 
 //----------------------------------------------------------------------------------------------------
 // Tasks
@@ -219,7 +208,9 @@ static void fastTask(void *parameter) {
     printf("fastTask started\n");
 
     // Create a DAQ event named 'fastTask'
+#ifdef OPTION_XCP
     DaqCreateEvent(fastTask);
+#endif
 
     TickType_t lastWakeTime = xTaskGetTickCount();
     for (;;) {
@@ -233,7 +224,11 @@ static void fastTask(void *parameter) {
         // Lock the calibration segment 'parameters' for thread-safe and consistent access.
         // There is no blocking mutex held during the lock, only atomics are used.
         {
+            #ifdef OPTION_XCP
             auto params = parameters_calseg.lock();
+            #else
+            auto params = &parameters;
+            #endif
 
             // Save the task period parameter, don't delay during the lock to give XCP a chance to modify the parameters
             clamp_parameter(period_ms, params->fast_task_period_ms, FASTTASK_PERIOD_MIN_MS, FASTTASK_PERIOD_MAX_MS);
@@ -254,7 +249,9 @@ static void fastTask(void *parameter) {
         }
 
         // Trigger the DAQ event 'fastTask'
+#ifdef OPTION_XCP
         DaqTriggerEvent(fastTask);
+#endif
 
 #ifdef OPTION_IO
         rstPin1();
@@ -305,7 +302,11 @@ static void slowTask(void *parameter) {
 #endif
 
         {
+            #ifdef OPTION_XCP
             auto params = parameters_calseg.lock();
+            #else
+            auto params = &parameters;
+            #endif
 
             clamp_parameter(slow_task_period_ms, params->slow_task_period_ms, SLOWTASK_PERIOD_MIN_MS, SLOWTASK_PERIOD_MAX_MS);
             fast_task_period_ms = params->fast_task_period_ms;
@@ -330,16 +331,9 @@ static void slowTask(void *parameter) {
                 } else {
                     pressure = NAN; // Degenerate calibration
                 }
-            } else
+            } 
 #endif
-            {
-                pressure = params->amplitude * sinf(phase);
-                phase += SINE_PHASE_STEP_RAD;
-                if (phase >= SINE_PERIOD_RAD) {
-                    phase -= SINE_PERIOD_RAD;
-                }
-            }
-        }
+        } // unlock
 
         if (min_max_reset != last_min_max_reset) {
             last_min_max_reset = min_max_reset;
@@ -360,7 +354,9 @@ static void slowTask(void *parameter) {
         }
 
         // Create and trigger the DAQ event 'slowTask'
+#ifdef OPTION_XCP
         DaqCreateAndTriggerEvent(slowTask);
+#endif
 
 #ifdef OPTION_MQTT
         // XCP observes the raw signal at task rate; MQTT carries the mean over

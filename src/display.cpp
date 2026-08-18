@@ -25,9 +25,7 @@
 #include <math.h>
 #include <string.h>
 
-#ifdef OPTION_XCP
-#include "xcp.h"
-#endif
+#include "xcp.h" // NOP when !defined(OPTION_XCP)
 
 #ifdef OPTION_ANALOG
 #include "analog.h"
