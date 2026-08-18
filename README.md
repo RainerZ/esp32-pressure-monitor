@@ -55,6 +55,7 @@ a two channel scope. Connect both probe grounds to GND.
 ## Quick start
 
 ```bash
+tools/update_xcplite.sh            # fetch the XCPlite sources, once per clone
 cp src/wlan.h.example src/wlan.h   # then edit in your SSID and password
 pio run --target upload
 pio device monitor                 # note the IP address the board reports
@@ -77,7 +78,9 @@ Measurements, all observable over XCP:
 
 | Signal | Unit | Description |
 |---|---|---|
-| `pressure` | bar | Calibrated pressure, updated in `slowTask` |
+| `pressure` | bar | Calibrated pressure, updated in `slowTask` at task rate |
+| `pressure_filtered` | bar | Mean pressure over the last publish interval — the value sent to MQTT |
+| `pressure_filtered_samples` | | Number of samples averaged into `pressure_filtered` |
 | `pressure_sensor_voltage` | V | Raw sensor voltage on AIN0 |
 | `global_counter` | | Free running counter, incremented in `fastTask` |
 | `fastTaskOverruns`, `slowTaskOverruns` | | Deadline misses, non-zero when a period is set too aggressively |
@@ -88,6 +91,7 @@ Calibration parameters in the `parameters` segment, writable live over XCP:
 |---|---|---|
 | `fast_task_period_ms` | ms | 1 |
 | `slow_task_period_ms` | ms | 2 |
+| `mqtt_publish_period_ms` | ms | `MQTT_PUBLISH_PERIOD_MS`, default 1000 (clamped to 100 … 3600000) |
 | `counter_max` | | 1000 |
 | `amplitude` | bar | 1.0 (fallback sine generator only) |
 | `sensor_voltage_point1` / `pressure_point1` | V / bar | 0.0 / 0.0 |
@@ -96,6 +100,11 @@ Calibration parameters in the `parameters` segment, writable live over XCP:
 The two calibration points define a straight line; values between and outside
 them are interpolated and extrapolated. If both voltage points are equal, the
 calibration is degenerate and `pressure` is set to `NaN`.
+
+Calibration changes are **lost on reset** — this build has no persistence, and
+`xcpclient` correspondingly reports `FREEZE_SUPPORTED = false`. Options for
+changing that are collected in
+[docs/CALIBRATION_PERSISTENCE.md](docs/CALIBRATION_PERSISTENCE.md).
 
 Calibration segments are accessed through a lock that uses atomics only, with no
 blocking mutex held, so XCP can rewrite parameters without disturbing task timing.
@@ -131,17 +140,44 @@ build_flags =
 
 ### MQTT
 
-The slow task never performs network operations. It formats a JSON snapshot into
-a one-element mailbox at most once per second; a separate low priority task owns
-the broker connection, reconnection, and publishing, and always sends the newest
-queued snapshot. Nothing is published while `pressure` is `NaN`.
+XCP and MQTT deliberately carry different things. XCP exposes the **raw**
+`pressure` at task rate for real-time analysis; MQTT carries the **mean** over
+the publish interval, so a once-per-second subscriber gets a filtered value
+rather than an arbitrary instantaneous sample.
+
+`slowTask` accumulates every valid `pressure` sample and, once the interval
+elapses, divides by the sample count, stores the result in `pressure_filtered`
+and hands it to the publisher task. At the 2 ms default that averages about 500
+samples per second, which resolves well below one ADS1115 quantization step: raw
+readings jump between discrete LSB values, while the filtered output moves
+smoothly in the fifth decimal.
+
+The accumulator is a `double`. A long calibrated interval can gather tens of
+thousands of samples, and one software `double` add per 2 ms task cycle is far
+below the noise floor of the task timing.
+
+The averaging window and the publish period are the same value, and it is an XCP
+**calibration parameter** (`parameters.mqtt_publish_period_ms`), so you can
+retune it live from CANape without reflashing. It is clamped to 100 … 3600000 ms.
+
+The power-on value is still a build flag, `MQTT_PUBLISH_PERIOD_MS`: it sets the
+calibration *default/reference page*, which is what the node starts with and what
+CANape shows as the reference value. XCP changes on the working page override it
+until the next reset — this build has no persistence, so a calibrated value is
+not retained across a power cycle. A `static_assert` rejects a build flag outside
+the clamp range, so the startup value can never silently disagree with the A2L.
+
+The slow task never performs network operations: it formats a JSON snapshot into
+a one-element mailbox, and a separate low priority task owns the broker
+connection, reconnection, and publishing, always sending the newest queued
+value. Nothing is published while every sample in an interval is `NaN`.
 
 Defaults:
 
-- Broker `mqtt.local:1883`
+- Broker `192.168.0.200:1883` (set in `platformio.ini`)
 - Topic `pressure_monitor/measurement`
-- Payload `{"pressure":1.234567,"voltage":0.987654}`
-- Publish period 1000 ms
+- Payload `{"pressure":1.086450}`
+- Publish period 1000 ms, adjustable over XCP
 
 Override with build flags:
 
@@ -150,8 +186,8 @@ build_flags =
     -DMQTT_BROKER_HOST=\"192.168.0.10\"
     -DMQTT_BROKER_PORT=1883
     -DMQTT_TOPIC=\"pressure_monitor/measurement\"
-    -DMQTT_PUBLISH_PERIOD_MS=1000
     -DMQTT_PAYLOAD_MAX_LENGTH=160
+    -DMQTT_PUBLISH_PERIOD_MS=1000
 ```
 
 For a broker requiring authentication, define both `MQTT_USERNAME` and
@@ -180,10 +216,17 @@ src/
   mqtt.cpp                MQTT publisher task
   clock64.c               64 bit microsecond DAQ clock
   wlan.h.example          Template for the gitignored src/wlan.h
-xcplite/                  Vendored XCPlite subset, see below
+xcplite/                  XCPlite subset, fetched by the script below (gitignored)
 tools/update_xcplite.sh   Refreshes xcplite/ from an XCPlite repository
+docs/LINKER_SECTIONS.md   Reference notes on the XCP flash sections
+docs/CALIBRATION_PERSISTENCE.md  Deferred design discussion, not implemented
 CANape/                   CANape project and generated A2L
 ```
+
+`docs/LINKER_SECTIONS.md` explains the ESP32 flash layout this project depends
+on — what the four XCP sections are for, the two different ways `xcpclient`
+finds them, and the two ESP-IDF constraints that make the layout fragile. Read
+it before touching `extra_linker_script.py`.
 
 
 ## The XCPlite library
@@ -193,9 +236,22 @@ CANape/                   CANape project and generated A2L
 them into a static library at build time and puts `xcplite/inc` and `xcplite/src`
 on the include path.
 
-Vendoring rather than submoduling keeps the repository self-contained and
-buildable offline, and keeps library code visible to the debugger.
-`xcplite/VERSION` records exactly which upstream commit the snapshot came from.
+`xcplite/` is **gitignored**, so the snapshot is not carried in this repository's
+history. A fresh clone therefore has to fetch it once before the first build:
+
+```bash
+tools/update_xcplite.sh
+```
+
+Until that runs, `pio run` stops immediately with
+`Vendored XCPlite sources not found at .../xcplite/src. Run tools/update_xcplite.sh`.
+
+The upstream ref is pinned by `DEFAULT_REF` in `tools/update_xcplite.sh`, which
+*is* tracked, so the pin survives a clone even though the sources do not. After
+fetching, `xcplite/VERSION` records the exact commit that was used.
+
+Fetching sources rather than submoduling keeps upstream code out of this
+repository's history while still letting the debugger step into library code.
 
 Refresh it with:
 
@@ -217,6 +273,10 @@ The source list is defined twice, in `XCPLITE_SOURCES` in `extra_script.py` and
 in the manifest in `tools/update_xcplite.sh`. Keep them in sync.
 
 ### Configuration and linker sections
+
+> Detailed background, failure modes and a diagnosis cheat sheet:
+> [docs/LINKER_SECTIONS.md](docs/LINKER_SECTIONS.md)
+
 
 The firmware uses XCPlite's `rtos` configuration:
 

@@ -59,6 +59,22 @@
 #define SLOWTASK_PERIOD_MIN_MS 1
 #define SLOWTASK_PERIOD_MAX_MS 1000
 
+// Bounds for the calibratable MQTT publish period
+#define MQTT_PERIOD_MIN_MS 100
+#define MQTT_PERIOD_MAX_MS 3600000
+
+// Power-on default for the MQTT publish period and averaging window.
+// This is the value of the calibration default/reference page, so a build flag
+// sets what the node starts up with; XCP can still change it at runtime. A
+// runtime change is lost on reset, since this build has no persistence.
+#ifndef MQTT_PUBLISH_PERIOD_MS
+#define MQTT_PUBLISH_PERIOD_MS 1000
+#endif
+
+static_assert(MQTT_PUBLISH_PERIOD_MS >= MQTT_PERIOD_MIN_MS && MQTT_PUBLISH_PERIOD_MS <= MQTT_PERIOD_MAX_MS,
+              "MQTT_PUBLISH_PERIOD_MS must lie within MQTT_PERIOD_MIN_MS..MQTT_PERIOD_MAX_MS, otherwise the "
+              "startup value would be silently clamped and differ from the A2L reference page");
+
 // Fallback signal generator, used when no analog converter is available
 #define SINE_PHASE_STEP_RAD 0.001f
 #define SINE_PERIOD_RAD 6.28318530717958647692f
@@ -111,12 +127,26 @@ XCP_UNIT(pressure_sensor_voltage, "V");
 static uint32_t fastTaskOverruns = 0;
 static uint32_t slowTaskOverruns = 0;
 
+#ifdef OPTION_MQTT
+// Mean pressure over the last publish interval; this is what MQTT sends.
+// Deliberately not declared in pressure_monitor.h: a variable that is both
+// declared in a header and defined here registers twice during A2L generation.
+float pressure_filtered = NAN;
+XCP_COMMENT(pressure_filtered, "Mean pressure over the last MQTT publish interval, as published to MQTT");
+XCP_UNIT(pressure_filtered, "bar");
+
+// Number of samples averaged into the last published value
+uint32_t pressure_filtered_samples = 0;
+XCP_COMMENT(pressure_filtered_samples, "Number of slowTask samples averaged into pressure_filtered");
+#endif
+
 //----------------------------------------------------------------------------------------------------
 // Calibration parameters
 
 struct parameters {
-    uint32_t fast_task_period_ms; // Period of fastTask in milliseconds
-    uint32_t slow_task_period_ms; // Period of slowTask in milliseconds
+    uint32_t fast_task_period_ms;   // Period of fastTask in milliseconds
+    uint32_t slow_task_period_ms;   // Period of slowTask in milliseconds
+    uint32_t mqtt_publish_period_ms; // Averaging window and MQTT publish period in milliseconds
     uint16_t counter_max;         // Wrap-around value for global_counter
     float amplitude;              // Amplitude of the fallback sine generator
     float sensor_voltage_point1;  // Sensor voltage at calibration point 1
@@ -127,6 +157,8 @@ struct parameters {
 
 XCP_UNIT(parameters__fast_task_period_ms, "ms");
 XCP_UNIT(parameters__slow_task_period_ms, "ms");
+XCP_COMMENT(parameters__mqtt_publish_period_ms, "MQTT publish period, and the averaging window for pressure_filtered");
+XCP_UNIT(parameters__mqtt_publish_period_ms, "ms");
 XCP_UNIT(parameters__amplitude, "bar");
 XCP_COMMENT(parameters__sensor_voltage_point1, "Pressure sensor voltage at two-point calibration point 1");
 XCP_UNIT(parameters__sensor_voltage_point1, "V");
@@ -143,6 +175,7 @@ XCP_UNIT(parameters__pressure_point2, "bar");
 const struct parameters parameters = {
     .fast_task_period_ms = 1, // 1 ms = 1000 Hz
     .slow_task_period_ms = 2, // 2 ms = 500 Hz
+    .mqtt_publish_period_ms = MQTT_PUBLISH_PERIOD_MS,
     .counter_max = 1000,
     .amplitude = 1.0f,
     .sensor_voltage_point1 = 0.0f,
@@ -217,8 +250,11 @@ static void fastTask(void *parameter) {
             // Save the task period parameter, don't delay during the lock to give XCP a chance to modify the parameters
             clamp_parameter(period_ms, params->fast_task_period_ms, FASTTASK_PERIOD_MIN_MS, FASTTASK_PERIOD_MAX_MS);
 
-            counter++;
-            static_counter++;
+            // Explicit read-modify-write: ++ on a volatile is deprecated in C++20.
+            // The volatile itself is deliberate, it keeps these locals in memory
+            // so the offline A2L generator can discover them in the DWARF data.
+            counter = counter + 1;
+            static_counter = static_counter + 1;
             if (counter > params->counter_max) {
                 counter = 0;
                 static_counter = 0;
@@ -254,6 +290,17 @@ static void slowTask(void *parameter) {
     uint32_t fast_task_period_ms;
     (void)fast_task_period_ms;
 
+#ifdef OPTION_MQTT
+    // Averaging accumulator for the MQTT publish interval. The sum is a double:
+    // a long calibrated interval can accumulate tens of thousands of samples,
+    // and on this Xtensa core one software double add per 2 ms task cycle is
+    // far below the noise floor of the task timing.
+    uint32_t mqtt_publish_period_ms = 0;
+    double pressure_sum = 0.0;
+    uint32_t pressure_samples = 0;
+    TickType_t lastPublishTime = xTaskGetTickCount();
+#endif
+
     printf("slowTask started\n");
     printf("  frameaddr = %p\n", xcp_get_frame_addr());
     printf("  &counter = %p\n", &counter);
@@ -270,8 +317,11 @@ static void slowTask(void *parameter) {
 
             clamp_parameter(slow_task_period_ms, params->slow_task_period_ms, SLOWTASK_PERIOD_MIN_MS, SLOWTASK_PERIOD_MAX_MS);
             fast_task_period_ms = params->fast_task_period_ms;
+#ifdef OPTION_MQTT
+            clamp_parameter(mqtt_publish_period_ms, params->mqtt_publish_period_ms, MQTT_PERIOD_MIN_MS, MQTT_PERIOD_MAX_MS);
+#endif
 
-            counter++;
+            counter = counter + 1; // ++ on a volatile is deprecated in C++20
             if (counter > params->counter_max) {
                 counter = 0;
             }
@@ -301,12 +351,27 @@ static void slowTask(void *parameter) {
         // Create and trigger the DAQ event 'slowTask'
         DaqCreateAndTriggerEvent(slowTask);
 
-#if defined(OPTION_MQTT) && defined(OPTION_ANALOG)
-        // Hand the latest snapshot to the MQTT publisher task. This only formats
-        // and queues, the publisher task owns all network operations and the
-        // request is dropped when the publish period has not elapsed yet.
-        if (!isnan(pressure) && !isnan(pressure_sensor_voltage)) {
-            (void)mqttRequestPublish("{\"pressure\":%.6f,\"voltage\":%.6f}", (double)pressure, (double)pressure_sensor_voltage);
+#ifdef OPTION_MQTT
+        // XCP observes the raw signal at task rate; MQTT carries the mean over
+        // the calibrated interval instead, so a slow subscriber sees a filtered
+        // value rather than an arbitrary instantaneous sample.
+        if (!isnan(pressure)) {
+            pressure_sum += (double)pressure;
+            pressure_samples++;
+        }
+
+        // TickType_t is unsigned, so this comparison survives tick wraparound
+        const TickType_t now = xTaskGetTickCount();
+        if ((TickType_t)(now - lastPublishTime) >= pdMS_TO_TICKS(mqtt_publish_period_ms)) {
+            lastPublishTime = now;
+            if (pressure_samples > 0) {
+                pressure_filtered = (float)(pressure_sum / (double)pressure_samples);
+                pressure_filtered_samples = pressure_samples;
+                // Formats and queues only; the publisher task owns all network I/O
+                (void)mqttRequestPublish("{\"pressure\":%.6f}", (double)pressure_filtered);
+            }
+            pressure_sum = 0.0;
+            pressure_samples = 0;
         }
 #endif
 

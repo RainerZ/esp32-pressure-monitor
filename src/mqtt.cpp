@@ -22,10 +22,6 @@
 #define MQTT_TOPIC "pressure_monitor/measurement"
 #endif
 
-#ifndef MQTT_PUBLISH_PERIOD_MS
-#define MQTT_PUBLISH_PERIOD_MS 1000
-#endif
-
 static constexpr uint32_t MQTT_RECONNECT_PERIOD_MS = 5000;
 static constexpr uint32_t MQTT_TASK_POLL_PERIOD_MS = 100;
 static constexpr uint32_t MQTT_TASK_STACK_SIZE = 4096;
@@ -40,7 +36,6 @@ struct MqttPublishRequest {
 static WiFiClient mqttNetworkClient;
 static PubSubClient mqttClient(mqttNetworkClient);
 static QueueHandle_t publishQueue = nullptr;
-static uint32_t lastPublishRequestMs = 0;
 
 static bool connectMqtt() {
     char clientId[40];
@@ -106,8 +101,6 @@ bool mqttInit(void) {
         return false;
     }
 
-    lastPublishRequestMs = millis() - MQTT_PUBLISH_PERIOD_MS;
-
     mqttClient.setServer(MQTT_BROKER_HOST, MQTT_BROKER_PORT);
     mqttClient.setSocketTimeout(2);
 
@@ -127,11 +120,6 @@ bool mqttRequestPublish(const char *format, ...) {
         return false;
     }
 
-    const uint32_t now = millis();
-    if (now - lastPublishRequestMs < MQTT_PUBLISH_PERIOD_MS) {
-        return false;
-    }
-
     MqttPublishRequest request = {};
     va_list args;
     va_start(args, format);
@@ -142,12 +130,7 @@ bool mqttRequestPublish(const char *format, ...) {
         return false;
     }
 
-    if (xQueueOverwrite(publishQueue, &request) != pdPASS) {
-        return false;
-    }
-
-    lastPublishRequestMs = now;
-    return true;
+    return xQueueOverwrite(publishQueue, &request) == pdPASS;
 }
 
 #else

@@ -24,8 +24,13 @@ extern "C" {
 bool mqttInit(void);
 
 // Format and submit the latest JSON payload without performing network I/O.
-// Returns true if the payload was accepted. Requests inside the configured
-// publish period or payloads exceeding MQTT_PAYLOAD_MAX_LENGTH are rejected.
+// Returns true if the payload was accepted; payloads exceeding
+// MQTT_PAYLOAD_MAX_LENGTH are rejected.
+//
+// This does not rate limit. The caller decides when to publish, because the
+// interval is an XCP calibration parameter (parameters.mqtt_publish_period_ms)
+// and doubles as the averaging window. Calling faster simply overwrites the
+// mailbox, so the publisher task always sends the newest value.
 bool mqttRequestPublish(const char *format, ...) __attribute__((format(printf, 1, 2)));
 
 #ifdef __cplusplus
