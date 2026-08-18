@@ -235,8 +235,16 @@ The EPK is only read from the `xcp_epk` section, so its length varies with the
 version string — see [docs/LINKER_SECTIONS.md](docs/LINKER_SECTIONS.md) for why
 that section is padded and why the length is safe to change.
 
-Note that `xcpclient` does **not** currently compare the two; the assertion is a
-`@@@@ TODO` in its source. CANape does perform the check.
+`xcpclient` compares the two since XCPlite `7df1965` and warns on a mismatch:
+
+```
+[WARN ] EPK mismatch: A2L file CANape/pressure_monitor.a2l has EPK 'V100-05f9c6f8',
+        target has EPK 'V100-3b357d1d'. The A2L file is outdated, addresses may be wrong.
+```
+
+It is a warning, not a hard failure, so you can still connect with a suspect A2L
+while iterating. Rebuild the A2L from the current ELF to clear it. An older
+`xcpclient` will not report anything — the comparison used to be a `@@@@ TODO`.
 
 
 ## Project layout
