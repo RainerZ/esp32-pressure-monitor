@@ -17,10 +17,16 @@
 - Keep `XCPLITE_SOURCES` in `extra_script.py` in sync with the manifest in
   `tools/update_xcplite.sh`.
 - `xcp_cals`, `xcp_evts`, `xcp_epk` and `xcp_meta` carry the metadata for offline
-  A2L generation. Keep them in flash and retained by the linker.
-- ESP-IDF requires `.flash.appdesc` and `.flash.rodata` to be adjacent.
-  `extra_linker_script.py` handles this. Do not remove or relocate it without
-  re-checking the ELF and that `firmware.bin` is still produced.
+  A2L generation. Keep them in flash and retained by the linker. `xcpclient`
+  locates `xcp_epk` and `xcp_meta` by ELF section name, but `xcp_cals` and
+  `xcp_evts` are merged into `.flash.rodata` and are found only through the
+  `__start_*` / `__stop_*` boundary symbols. Dropping those symbols breaks event
+  ID derivation and therefore A2L generation.
+- ESP-IDF requires `.flash.appdesc` and `.flash.rodata` to be adjacent, and
+  `.flash.rodata`, `xcp_epk` and `xcp_meta` must be exactly contiguous so the
+  image has a single DROM segment. A gap makes the bootloader map only the last
+  segment and the board resets on every boot. `extra_linker_script.py` pads the
+  named sections and asserts contiguity after linking. Do not remove either.
 - Never commit `src/wlan.h` or credentials in build flags.
 
 ## Verification
@@ -32,5 +38,6 @@ After changing build flags, source selection or linker behaviour:
    `xcp_epk` / `xcp_meta` are still named sections.
 3. `nm` — `__start_xcp_cals`, `__stop_xcp_cals`, `__start_xcp_evts`,
    `__stop_xcp_evts` are all defined.
-4. Regenerate the A2L with `xcpclient` and confirm both DAQ events and the
+4. `esptool image-info firmware.bin` reports exactly one DROM segment.
+5. Regenerate the A2L with `xcpclient` and confirm both DAQ events and the
    `parameters` segment appear.

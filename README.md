@@ -200,13 +200,18 @@ buildable offline, and keeps library code visible to the debugger.
 Refresh it with:
 
 ```bash
-tools/update_xcplite.sh --repo https://github.com/RainerZ/XCPlite --ref master
+tools/update_xcplite.sh                 # reuse the repo and ref in xcplite/VERSION
+tools/update_xcplite.sh --ref V2.1.11   # move to another upstream ref
 ```
 
 With no arguments the script reuses the repo and ref recorded in
-`xcplite/VERSION`. A local path is a valid `--repo`, which is currently required:
-the XCPlite changes this project depends on live on a local branch that has not
-been pushed.
+`xcplite/VERSION`, so re-running it reproduces the current snapshot. A local path
+is also a valid `--repo`, which is useful for testing an upstream change before
+it is pushed:
+
+```bash
+tools/update_xcplite.sh --repo ~/git/XCPlite-RainerZ --ref V2.1.10
+```
 
 The source list is defined twice, in `XCPLITE_SOURCES` in `extra_script.py` and
 in the manifest in `tools/update_xcplite.sh`. Keep them in sync.
@@ -235,8 +240,35 @@ fails.
 `sections.ld`: it collects `xcp_cals` and `xcp_evts` at the start of
 `.flash.rodata` and defines the `__start_*` / `__stop_*` boundary symbols, and
 places `xcp_epk` and `xcp_meta` immediately afterwards as individually named
-output sections, because `xcpclient` locates those by ELF section name. The
-installed PlatformIO framework files are never modified.
+output sections. The installed PlatformIO framework files are never modified.
+
+`xcpclient` finds this metadata two different ways, which is why the layout is
+asymmetric:
+
+- `xcp_epk` and `xcp_meta` are located **by ELF section name**, so they must
+  survive as named output sections.
+- `xcp_cals` and `xcp_evts` end up merged into `.flash.rodata` and no longer
+  exist as sections with those names. `xcpclient` falls back to the
+  `__start_xcp_cals` / `__stop_xcp_cals` and `__start_xcp_evts` /
+  `__stop_xcp_evts` boundary symbols instead. Those symbols are therefore not
+  optional debug aids — without them event IDs cannot be derived and A2L
+  generation fails.
+
+**These four sections must be exactly contiguous.** esptool only merges ELF
+sections into a single image segment when no gap separates them. `xcp_epk` is
+5 bytes, so without padding it ends unaligned and the `ALIGN(8)` of `xcp_meta`
+leaves a 7 byte hole. That splits the flash rodata into two DROM segments, and
+the ESP-IDF bootloader then maps only the last one — the tiny `xcp_meta` —
+leaving all real rodata unmapped. The firmware crashes and resets on every boot,
+printing only:
+
+```
+E (209) boot: Image contains multiple DROM segments. Only the last one will be mapped.
+```
+
+The script pads each named section with a trailing `. = ALIGN(8);` to prevent
+this, and a post-build check parses the ELF and fails the build with an explicit
+error if a gap ever reappears. Do not remove either.
 
 After changing build flags, source selection, or linker behaviour, verify:
 
@@ -244,10 +276,12 @@ After changing build flags, source selection, or linker behaviour, verify:
 pio run
 xtensa-esp32s3-elf-readelf -S .pio/build/lilygo-t-display-s3/firmware.elf | grep -i "xcp\|flash.rodata\|appdesc"
 xtensa-esp32s3-elf-nm .pio/build/lilygo-t-display-s3/firmware.elf | grep "__start_xcp\|__stop_xcp"
+python -m esptool --chip esp32s3 image-info .pio/build/lilygo-t-display-s3/firmware.bin | grep DROM
 ```
 
-`.flash.appdesc` must end exactly where `.flash.rodata` begins, and `xcp_epk` and
-`xcp_meta` must still be named sections.
+`.flash.appdesc` must end exactly where `.flash.rodata` begins, `xcp_epk` and
+`xcp_meta` must still be named sections, and the image must contain exactly
+**one** DROM segment.
 
 
 ## Offline A2L generation
@@ -271,6 +305,16 @@ address into the A2L; without it the A2L defaults to localhost.
 Expected output: the `fastTask` and `slowTask` events, the `parameters` segment
 with its eight members, global and static measurements, supported stack
 variables, the `V100` EPK, and the comments and units from the `xcp_meta` section.
+
+This needs an `xcpclient` new enough to fall back to the `__start_xcp_evts` /
+`__stop_xcp_evts` boundary symbols when no section literally named `xcp_evts`
+exists in the ELF. That fallback arrived in XCPlite commit `20175a2`, which is on
+the `V2.1.10` branch but *after* the commit labelled V2.1.10 — so build
+`xcpclient` from the branch head, not from that commit. An older `xcpclient`
+cannot derive distinct event IDs from this layout and aborts with
+`Duplicate("fastTask")` before reaching calibration and metadata registration.
+The snapshot in `xcplite/VERSION` is newer than `20175a2`, so an `xcpclient`
+built from the same ref always works.
 
 Two harmless diagnostics from `xcpclient`:
 

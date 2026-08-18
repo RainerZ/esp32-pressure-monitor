@@ -11,10 +11,10 @@
 #   tools/update_xcplite.sh                          # reuse repo+ref from xcplite/VERSION
 #   tools/update_xcplite.sh --ref V2.1.10
 #   tools/update_xcplite.sh --repo https://github.com/RainerZ/XCPlite --ref master
-#   tools/update_xcplite.sh --repo ~/git/XCPlite-RainerZ --ref esp32_pressure_monitor
+#   tools/update_xcplite.sh --repo ~/git/XCPlite-RainerZ --ref V2.1.10
 #
-# A local path is a valid --repo. That is currently required, because the
-# XCPlite library changes this project depends on only exist on a local branch.
+# A local path is a valid --repo, which is useful for testing an upstream change
+# before it is pushed.
 
 set -euo pipefail
 
@@ -23,7 +23,7 @@ VENDOR_DIR="${PROJECT_DIR}/xcplite"
 VERSION_FILE="${VENDOR_DIR}/VERSION"
 
 DEFAULT_REPO="https://github.com/RainerZ/XCPlite"
-DEFAULT_REF="master"
+DEFAULT_REF="V2.1.10"
 
 # Public API headers, copied to xcplite/inc/
 INC_FILES=(
