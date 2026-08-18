@@ -223,6 +223,18 @@ CalSegDeclRef(parameters, parameters_calseg);
 //----------------------------------------------------------------------------------------------------
 // Tasks
 
+#ifdef OPTION_MQTT
+// Render a float as a JSON number, or as null when it is not available.
+// A bare nan is not valid JSON and would be rejected by strict parsers.
+static void formatJsonNumber(char *out, size_t len, float value) {
+    if (isnan(value)) {
+        snprintf(out, len, "null");
+    } else {
+        snprintf(out, len, "%.6f", (double)value);
+    }
+}
+#endif
+
 static TaskHandle_t fastTaskHandle;
 static TaskHandle_t slowTaskHandle;
 
@@ -410,8 +422,19 @@ static void slowTask(void *parameter) {
             if (pressure_samples > 0) {
                 pressure_filtered = (float)(pressure_sum / (double)pressure_samples);
                 pressure_filtered_samples = pressure_samples;
+
+                // min and max are the extremes recorded since the last reset,
+                // the same values the display shows, not the extremes of this
+                // interval alone.
+                char meanText[16];
+                char minText[16];
+                char maxText[16];
+                formatJsonNumber(meanText, sizeof(meanText), pressure_filtered);
+                formatJsonNumber(minText, sizeof(minText), pressure_min);
+                formatJsonNumber(maxText, sizeof(maxText), pressure_max);
+
                 // Formats and queues only; the publisher task owns all network I/O
-                (void)mqttRequestPublish("{\"pressure\":%.6f}", (double)pressure_filtered);
+                (void)mqttRequestPublish("{\"pressure\":%s,\"min\":%s,\"max\":%s}", meanText, minText, maxText);
             }
             pressure_sum = 0.0;
             pressure_samples = 0;

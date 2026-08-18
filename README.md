@@ -200,6 +200,13 @@ until the next reset — this build has no persistence, so a calibrated value is
 not retained across a power cycle. A `static_assert` rejects a build flag outside
 the clamp range, so the startup value can never silently disagree with the A2L.
 
+`min` and `max` are the extremes recorded since the last reset — the same values
+the display shows — not the extremes of that one interval. They are captured at
+task rate, so a spike shorter than the publish period still reaches the broker.
+Restart the recording by writing a new value to the `min_max_reset` calibration
+parameter. A value that is not yet available is published as JSON `null` rather
+than a bare `nan`, which strict parsers reject.
+
 The slow task never performs network operations: it formats a JSON snapshot into
 a one-element mailbox, and a separate low priority task owns the broker
 connection, reconnection, and publishing, always sending the newest queued
@@ -209,7 +216,7 @@ Defaults:
 
 - Broker `192.168.0.200:1883` (set in `platformio.ini`)
 - Topic `pressure_monitor/measurement`
-- Payload `{"pressure":1.086450}`
+- Payload `{"pressure":1.096658,"min":1.096375,"max":1.097125}`
 - Publish period 1000 ms, adjustable over XCP
 
 Override with build flags:
