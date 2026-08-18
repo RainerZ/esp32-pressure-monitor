@@ -25,7 +25,9 @@
 #include <math.h>
 #include <string.h>
 
-#include "xcplib.hpp"
+#ifdef OPTION_XCP
+#include "xcp.h"
+#endif
 
 #ifdef OPTION_ANALOG
 #include "analog.h"
@@ -185,11 +187,13 @@ static void renderStatus(void) {
         snprintf(status, sizeof(status), "%-21s", "NO SENSOR - sine sim");
     } else
 #endif
-        if (XcpIsDaqRunning()) {
-        snprintf(status, sizeof(status), "%-21s", "XCP measuring");
-    } else if (XcpIsConnected()) {
-        snprintf(status, sizeof(status), "%-21s", "XCP connected");
-    } else if (WiFi.status() == WL_CONNECTED) {
+#ifdef OPTION_XCP
+    if (xcpStatusText() != nullptr) {
+        // A tool is attached; show that instead of the address
+        snprintf(status, sizeof(status), "%-21s", xcpStatusText());
+    } else 
+#endif
+    if (WiFi.status() == WL_CONNECTED) {
         snprintf(status, sizeof(status), "%-21s", WiFi.localIP().toString().c_str());
     } else {
         snprintf(status, sizeof(status), "%-21s", "no network");

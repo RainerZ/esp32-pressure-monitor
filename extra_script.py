@@ -13,29 +13,67 @@ project_dir = Path(env.subst("$PROJECT_DIR"))
 xcplite_inc = project_dir / "xcplite" / "inc"
 xcplite_src = project_dir / "xcplite" / "src"
 
-if not xcplite_src.is_dir():
-    raise RuntimeError(f"Vendored XCPlite sources not found at {xcplite_src}. Run tools/update_xcplite.sh")
 
-env.Append(CPPPATH=[str(xcplite_inc), str(xcplite_src)])
+def has_define(name):
+    """True when name is defined via build_flags, with or without a value.
 
-# The subset of XCPlite needed for a 32-bit FreeRTOS target in the rtos
-# configuration. The A2L generator, persistence, shared memory and the 64-bit
-# queue variants are disabled by xcplib_rtos_cfg.h and are not built.
-XCPLITE_SOURCES = [
-    "cal.c",
-    "platform.c",
-    "queue32m.c",
-    "xcpappl.c",
-    "xcpethserver.c",
-    "xcpethtl.c",
-    "xcplite.c",
-]
+    Since pre: scripts run early, we parse platformio.ini directly to be sure.
+    """
+    import re
+    import configparser
 
-env.BuildSources(
-    "$BUILD_DIR/xcplite",
-    str(xcplite_src),
-    src_filter=["+<{}>".format(source) for source in XCPLITE_SOURCES],
-)
+    # First try CPPDEFINES if it's populated
+    for define in env.get("CPPDEFINES", []):
+        if isinstance(define, (list, tuple)):
+            if define[0] == name:
+                return True
+        elif define == name:
+            return True
+
+    # Parse platformio.ini directly to be sure, since pre: scripts may not have
+    # the environment fully set up yet
+    config = configparser.ConfigParser()
+    config.read(project_dir / "platformio.ini")
+
+    if "env:lilygo-t-display-s3" in config:
+        build_flags = config.get("env:lilygo-t-display-s3", "build_flags", fallback="")
+        # Check for -D<name> or -D<name>= in the build flags
+        if re.search(rf"-D{name}(?:[=\s\n]|$)", build_flags):
+            return True
+
+    return False
+
+
+# OPTION_XCP is optional: an MQTT-only build neither compiles nor links XCPlite,
+# and does not even need the vendored sources to be present.
+xcp_enabled = has_define("OPTION_XCP")
+
+if xcp_enabled:
+    if not xcplite_src.is_dir():
+        raise RuntimeError(f"Vendored XCPlite sources not found at {xcplite_src}. Run tools/update_xcplite.sh")
+
+    env.Append(CPPPATH=[str(xcplite_inc), str(xcplite_src)])
+
+    # The subset of XCPlite needed for a 32-bit FreeRTOS target in the rtos
+    # configuration. The A2L generator, persistence, shared memory and the
+    # 64-bit queue variants are disabled by xcplib_rtos_cfg.h and are not built.
+    XCPLITE_SOURCES = [
+        "cal.c",
+        "platform.c",
+        "queue32m.c",
+        "xcpappl.c",
+        "xcpethserver.c",
+        "xcpethtl.c",
+        "xcplite.c",
+    ]
+
+    env.BuildSources(
+        "$BUILD_DIR/xcplite",
+        str(xcplite_src),
+        src_filter=["+<{}>".format(source) for source in XCPLITE_SOURCES],
+    )
+else:
+    print("OPTION_XCP not defined: building without XCPlite")
 
 
 # ----------------------------------------------------------------------------

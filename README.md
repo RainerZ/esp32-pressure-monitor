@@ -1,7 +1,7 @@
 # ESP32 Pressure Monitor
 
-A pressure monitoring node for the ESP32-S3. It reads a pressure sensor through
-an ADS1115, applies a two-point calibration, and serves the result two ways:
+A pressure monitoring node for the ESP32-S3. 
+It reads a pressure sensor through an ADS1115, applies a two-point calibration, and serves the result two ways:
 
 - **MQTT** — a JSON snapshot published once per second, for logging and dashboards.
 - **XCP on Ethernet** — the same signals observable in real time at task rate
@@ -10,13 +10,15 @@ an ADS1115, applies a two-point calibration, and serves the result two ways:
 
 That combination is the point of the project: MQTT gives you the slow, cheap,
 always-on data stream, while XCP lets you connect at any moment and watch the
-raw signal at full rate without changing the firmware or restarting anything.
+raw signal at full rate without changing the firmware or restarting anything.  
+  
+So XCP allows you to observe transient pressure peaks in the pipe system, caused by opening and closing taps and valves.  
+MQTT can record long term pressure changes in your home automation system.  
+Longer term pressure monitoring is usefull to check that incoming pressure regulators, volume expansion tanks and overpressure valves are functional.  
 
 ![Demo Board](ESP32.png)
 
-Derived from the `freertos_esp32_demo` example of
-[XCPlite](https://github.com/RainerZ/XCPlite).
-
+Derived from the `freertos_esp32_demo` example of [XCPlite](https://github.com/RainerZ/XCPlite).
 
 ## Hardware
 
@@ -36,20 +38,9 @@ ADS1115 wiring for the LilyGo T-Display-S3:
 | ADDR    | GND                 |
 
 The pressure sensor is read on **AIN0**. The converter runs at gain 1 (a
-+/-4.096 V range) and 860 samples/s, so a conversion fits the default 2 ms slow
++/-4.096 V range) and 860 samples/s, so a conversion fits the default 2 ms
 task period. Never drive an ADS1115 input below GND or above its supply voltage,
 whatever the configured range.
-
-If the ADS1115 is not detected at startup, the firmware logs it and falls back to
-a generated sine wave, so the XCP and MQTT paths stay testable without hardware.
-
-### Scope pins
-
-Both tasks drive a pin high while running, so scheduler interaction is visible on
-a two channel scope. Connect both probe grounds to GND.
-
-- `fastTask`: GPIO2 / IO2, default period 1 ms
-- `slowTask`: GPIO1 / IO1, default period 2 ms
 
 
 ## Quick start
@@ -141,8 +132,7 @@ build_flags =
 
 ### Display
 
-The display shows the measurement, not the demo diagnostics it inherited from
-the XCPlite example:
+The display shows the measurement:
 
 ```
  192.168.0.154
@@ -168,8 +158,6 @@ is what keeps the digits readable. Each field is drawn with an opaque background
 in a fixed-width format and skipped when its text has not changed, so there is
 no clear-then-redraw flash.
 
-XCP diagnostics — task periods, counters, queue stack usage, the DAQ clock — are
-deliberately not shown. Use CANape or `xcpclient` for those.
 
 ### MQTT
 

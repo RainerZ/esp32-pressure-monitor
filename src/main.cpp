@@ -11,6 +11,10 @@
 #include "pressure_monitor.h"
 #include "wifi_sta.h"
 
+#ifdef OPTION_XCP
+#include "xcp.h"
+#endif
+
 #ifdef OPTION_DISPLAY
 #include "display.h"
 #endif
@@ -56,6 +60,15 @@ void setup() {
 #ifdef OPTION_MQTT
     if (!mqttInit()) {
         Serial.println("MQTT init failed");
+    }
+#endif
+
+#ifdef OPTION_XCP
+    if (!xcpInit()) {
+        printf("XCP server startup failed\n");
+#ifdef OPTION_DISPLAY
+        displayError("XCP init failed");
+#endif
     }
 #endif
 

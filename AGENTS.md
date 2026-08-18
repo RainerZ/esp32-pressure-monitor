@@ -10,6 +10,8 @@
 ## Invariants
 
 - Build with `pio run` from the project root.
+- Propose a commit message but let the user commit and push upstream
+- Ask before modifing the XCPlite and xcp-lite repositories
 - Keep the XCPlite `rtos` configuration: `_FREE_RTOS`,
   `XCPLITE_CONFIGURATION=rtos`, `XCPLIB_CFG_OVERRIDE="xcplib_rtos_cfg.h"`.
 - Never edit files under `xcplite/` by hand. They are a snapshot; change them
@@ -52,3 +54,6 @@ After changing build flags, source selection or linker behaviour:
 4. `esptool image-info firmware.bin` reports exactly one DROM segment.
 5. Regenerate the A2L with `xcpclient` and confirm both DAQ events and the
    `parameters` segment appear.
+
+
+

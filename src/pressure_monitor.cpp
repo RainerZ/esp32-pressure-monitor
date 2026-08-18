@@ -15,11 +15,11 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-#include "xcplib.hpp" // libxcplite C++ application programming interface
-
-#include "clock64.h"
-#include "epk.h"
 #include "pressure_monitor.h"
+
+#ifdef OPTION_XCP
+#include "xcp.h" 
+#endif
 
 #ifdef OPTION_DISPLAY
 #include "display.h"
@@ -39,13 +39,6 @@
 
 //----------------------------------------------------------------------------------------------------
 // Configuration
-
-// XCPlite parameters. The EPK (version string) is built in epk.cpp.
-#define XCP_PROJECT_NAME "pressure_monitor"
-#define XCP_USE_TCP false
-#define XCP_SERVER_PORT 5555
-#define XCP_QUEUE_SIZE 0 // Fixed by OPTION_QUEUE_32_SIZE in xcplib_rtos_cfg.h for the 32 bit FreeRTOS build, this parameter is ignored
-#define XCP_LOG_LEVEL 4  // 3 - Info, 4 - Print XCP commands, 5 - Debug
 
 // #define TASK_CORE 1 // If defined, pin both tasks to this core
 
@@ -78,40 +71,6 @@ static_assert(MQTT_PUBLISH_PERIOD_MS >= MQTT_PERIOD_MIN_MS && MQTT_PUBLISH_PERIO
 // Fallback signal generator, used when no analog converter is available
 #define SINE_PHASE_STEP_RAD 0.001f
 #define SINE_PERIOD_RAD 6.28318530717958647692f
-
-//----------------------------------------------------------------------------------------------------
-// XCP server
-
-static bool startXcpServer(void) {
-
-    XcpSetLogLevel(XCP_LOG_LEVEL);
-
-    // Publish the EPK into the xcp_epk section, then hand the identical string
-    // to XcpInit so the runtime GET_ID reply matches what xcpclient reads from
-    // the ELF. If those two ever disagree, the A2L match check is meaningless.
-    xcpCreateEpk();
-    printf("EPK = %s\n", xcpEpk());
-
-    // Initialize XCP protocol layer
-    const uint8_t bindAny[4] = {0, 0, 0, 0};
-    if (!XcpInit(XCP_PROJECT_NAME, xcpEpk(), XCP_MODE_LOCAL)) {
-        printf("XcpInit failed\n");
-        return false;
-    }
-
-    // Register the high resolution 64-bit clock implemented in clock64.c as XCP DAQ clock
-    Clock64_Init();
-    ApplXcpRegisterGetClockCallback(Clock64_Get);
-    ApplXcpRegisterIdleCallback(Clock64_Update);
-
-    // Initialize XCP Ethernet server
-    if (!XcpEthServerInit(bindAny, XCP_SERVER_PORT, XCP_USE_TCP, XCP_QUEUE_SIZE)) {
-        printf("XcpEthServerInit failed\n");
-        return false;
-    }
-
-    return true;
-}
 
 //----------------------------------------------------------------------------------------------------
 // Measurement variables
@@ -202,12 +161,14 @@ const struct parameters parameters = {
     .pressure_point2 = 1.0f,
 };
 
+#ifdef OPTION_XCP
 // Declare a calibration segment that wraps 'parameters' for thread-safe and consistent access.
 // This creates:
 //  - a linker-section 'xcp_cals' descriptor used by XcpInit() for registration
 //  - an internal calibration segment index initialized by XcpInit()
 //  - the typed C++ handle 'parameters_calseg' used by the tasks below
 CalSegDeclRef(parameters, parameters_calseg);
+#endif
 
 // Clamp a calibration parameter to a given value range
 #define clamp_parameter(x, y, min, max)                                                                                                                                            \
@@ -256,9 +217,6 @@ static void fastTask(void *parameter) {
     static volatile uint16_t static_counter = 0;
 
     printf("fastTask started\n");
-    printf("  frameaddr = %p\n", xcp_get_frame_addr());
-    printf("  &counter = %p\n", &counter);
-    printf("  &static_counter = %p\n", &static_counter);
 
     // Create a DAQ event named 'fastTask'
     DaqCreateEvent(fastTask);
@@ -338,8 +296,6 @@ static void slowTask(void *parameter) {
 #endif
 
     printf("slowTask started\n");
-    printf("  frameaddr = %p\n", xcp_get_frame_addr());
-    printf("  &counter = %p\n", &counter);
 
     TickType_t lastWakeTime = xTaskGetTickCount();
     for (;;) {
@@ -462,16 +418,7 @@ static void slowTask(void *parameter) {
 
 bool pressureMonitorInit(void) {
 
-    printf("Pressure monitor, XCP on Ethernet\n");
-    printf("  Scheduler running = %u\n", xTaskGetSchedulerState() == taskSCHEDULER_RUNNING);
-    printf("  Timebase 1 ms = %u ticks\n", (unsigned int)pdMS_TO_TICKS(1));
-    printf("  &global_counter = %p\n", &global_counter);
-    printf("  &parameters = %p\n", &parameters);
-
-    if (!startXcpServer()) {
-        printf("XCP server startup failed\n");
-        return false;
-    }
+    printf("Pressure monitor\n");
 
     if (!createTask(fastTask, "fastTask", FASTTASK_STACKSIZE, FASTTASK_PRIORITY, &fastTaskHandle)) {
         printf("Failed to create fastTask\n");
