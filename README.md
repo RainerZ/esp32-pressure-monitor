@@ -80,6 +80,7 @@ Measurements, all observable over XCP:
 | `pressure` | bar | Calibrated pressure, updated in `slowTask` at task rate |
 | `pressure_filtered` | bar | Mean pressure over the last publish interval — the value sent to MQTT |
 | `pressure_filtered_samples` | | Number of samples averaged into `pressure_filtered` |
+| `pressure_min` / `pressure_max` | bar | Extremes recorded at task rate since the last reset |
 | `pressure_sensor_voltage` | V | Raw sensor voltage on AIN0 |
 | `global_counter` | | Free running counter, incremented in `fastTask` |
 | `fastTaskOverruns`, `slowTaskOverruns` | | Deadline misses, non-zero when a period is set too aggressively |
@@ -91,6 +92,7 @@ Calibration parameters in the `parameters` segment, writable live over XCP:
 | `fast_task_period_ms` | ms | 1 |
 | `slow_task_period_ms` | ms | 2 |
 | `mqtt_publish_period_ms` | ms | `MQTT_PUBLISH_PERIOD_MS`, default 1000 (clamped to 100 … 3600000) |
+| `min_max_reset` | | 0 — write any *different* value to restart min/max recording |
 | `counter_max` | | 1000 |
 | `amplitude` | bar | 1.0 (fallback sine generator only) |
 | `sensor_voltage_point1` / `pressure_point1` | V / bar | 0.0 / 0.0 |
@@ -117,7 +119,7 @@ Everything is set through `build_flags` in [platformio.ini](platformio.ini).
 
 | Option | Effect |
 |---|---|
-| `OPTION_DISPLAY` | Status page on the T-Display-S3 LCD (needs LovyanGFX) |
+| `OPTION_DISPLAY` | Pressure page on the T-Display-S3 LCD (needs LovyanGFX) |
 | `OPTION_IO` | Scope trigger pins |
 | `OPTION_ANALOG` | ADS1115 input; without it the sine generator is always used |
 | `OPTION_MQTT` | MQTT publisher task |
@@ -136,6 +138,38 @@ build_flags =
     -DWIFI_SSID=\"your-ssid\"
     -DWIFI_PASSWORD=\"your-password\"
 ```
+
+### Display
+
+The display shows the measurement, not the demo diagnostics it inherited from
+the XCPlite example:
+
+```
+ 192.168.0.154
+
+   1.10 bar
+
+ [==========|              ]
+ min  1.097          max  1.101
+```
+
+- Current pressure in large digits, with the unit alongside.
+- The bar places the current value inside the recorded range, so you can see at
+  a glance where in its span the pressure is sitting.
+- `min` / `max` are recorded at **task rate**, not display rate, so a short spike
+  between two refreshes is still captured. Restart the recording by writing a
+  new value to the `min_max_reset` calibration parameter.
+- The top line shows the IP address, or the XCP connection state while a tool is
+  attached, or `NO SENSOR - sine sim` in red when no ADS1115 was found — so a
+  simulated sine wave is never mistaken for a real reading.
+
+The page is redrawn at most once per `DISPLAY_PERIOD_MS` (default 1000), which
+is what keeps the digits readable. Each field is drawn with an opaque background
+in a fixed-width format and skipped when its text has not changed, so there is
+no clear-then-redraw flash.
+
+XCP diagnostics — task periods, counters, queue stack usage, the DAQ clock — are
+deliberately not shown. Use CANape or `xcpclient` for those.
 
 ### MQTT
 

@@ -129,6 +129,16 @@ XCP_COMMENT(pressure_sensor_voltage, "Raw pressure sensor voltage measured on an
 XCP_UNIT(pressure_sensor_voltage, "V");
 #endif
 
+// Extremes recorded at task rate, not at display or MQTT rate, so a short
+// pressure spike between two publishes is still captured.
+float pressure_min = NAN;
+XCP_COMMENT(pressure_min, "Lowest pressure recorded since the last reset");
+XCP_UNIT(pressure_min, "bar");
+
+float pressure_max = NAN;
+XCP_COMMENT(pressure_max, "Highest pressure recorded since the last reset");
+XCP_UNIT(pressure_max, "bar");
+
 static uint32_t fastTaskOverruns = 0;
 static uint32_t slowTaskOverruns = 0;
 
@@ -152,6 +162,7 @@ struct parameters {
     uint32_t fast_task_period_ms;   // Period of fastTask in milliseconds
     uint32_t slow_task_period_ms;   // Period of slowTask in milliseconds
     uint32_t mqtt_publish_period_ms; // Averaging window and MQTT publish period in milliseconds
+    uint32_t min_max_reset;          // Write any different value to clear pressure_min and pressure_max
     uint16_t counter_max;         // Wrap-around value for global_counter
     float amplitude;              // Amplitude of the fallback sine generator
     float sensor_voltage_point1;  // Sensor voltage at calibration point 1
@@ -164,6 +175,7 @@ XCP_UNIT(parameters__fast_task_period_ms, "ms");
 XCP_UNIT(parameters__slow_task_period_ms, "ms");
 XCP_COMMENT(parameters__mqtt_publish_period_ms, "MQTT publish period, and the averaging window for pressure_filtered");
 XCP_UNIT(parameters__mqtt_publish_period_ms, "ms");
+XCP_COMMENT(parameters__min_max_reset, "Write any value different from the current one to restart the pressure min/max recording");
 XCP_UNIT(parameters__amplitude, "bar");
 XCP_COMMENT(parameters__sensor_voltage_point1, "Pressure sensor voltage at two-point calibration point 1");
 XCP_UNIT(parameters__sensor_voltage_point1, "V");
@@ -181,6 +193,7 @@ const struct parameters parameters = {
     .fast_task_period_ms = 1, // 1 ms = 1000 Hz
     .slow_task_period_ms = 2, // 2 ms = 500 Hz
     .mqtt_publish_period_ms = MQTT_PUBLISH_PERIOD_MS,
+    .min_max_reset = 0,
     .counter_max = 1000,
     .amplitude = 1.0f,
     .sensor_voltage_point1 = 0.0f,
@@ -295,6 +308,12 @@ static void slowTask(void *parameter) {
     uint32_t fast_task_period_ms;
     (void)fast_task_period_ms;
 
+    // The calibration segment gives read-only access to the working page, so a
+    // self-clearing flag is not possible. Instead any change of min_max_reset
+    // restarts the recording, which CANape can trigger by writing a new value.
+    uint32_t min_max_reset = 0;
+    uint32_t last_min_max_reset = 0;
+
 #ifdef OPTION_MQTT
     // Averaging accumulator for the MQTT publish interval. The sum is a double:
     // a long calibrated interval can accumulate tens of thousands of samples,
@@ -322,6 +341,7 @@ static void slowTask(void *parameter) {
 
             clamp_parameter(slow_task_period_ms, params->slow_task_period_ms, SLOWTASK_PERIOD_MIN_MS, SLOWTASK_PERIOD_MAX_MS);
             fast_task_period_ms = params->fast_task_period_ms;
+            min_max_reset = params->min_max_reset;
 #ifdef OPTION_MQTT
             clamp_parameter(mqtt_publish_period_ms, params->mqtt_publish_period_ms, MQTT_PERIOD_MIN_MS, MQTT_PERIOD_MAX_MS);
 #endif
@@ -353,6 +373,24 @@ static void slowTask(void *parameter) {
             }
         }
 
+        if (min_max_reset != last_min_max_reset) {
+            last_min_max_reset = min_max_reset;
+            pressure_min = NAN;
+            pressure_max = NAN;
+        }
+
+        // Record the extremes at task rate, so a spike between two publishes is
+        // not missed. isnan() comparisons are false, so the first valid sample
+        // seeds both bounds.
+        if (!isnan(pressure)) {
+            if (isnan(pressure_min) || pressure < pressure_min) {
+                pressure_min = pressure;
+            }
+            if (isnan(pressure_max) || pressure > pressure_max) {
+                pressure_max = pressure;
+            }
+        }
+
         // Create and trigger the DAQ event 'slowTask'
         DaqCreateAndTriggerEvent(slowTask);
 
@@ -381,7 +419,8 @@ static void slowTask(void *parameter) {
 #endif
 
 #ifdef OPTION_DISPLAY
-        displayUpdate(slow_task_period_ms, counter, fast_task_period_ms, global_counter);
+        // Called every cycle; the display module rate limits its own rendering
+        displayUpdate(pressure, pressure_min, pressure_max);
 #endif
 
 #ifdef OPTION_IO
