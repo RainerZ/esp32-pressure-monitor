@@ -195,8 +195,48 @@ For a broker requiring authentication, define both `MQTT_USERNAME` and
 ### XCP
 
 Set in `src/pressure_monitor.cpp`: UDP, port `5555`, project name
-`pressure_monitor`, EPK `V100`. TCP is not supported by the XCPlite FreeRTOS
-build.
+`pressure_monitor`. TCP is not supported by the XCPlite FreeRTOS build.
+
+#### EPK — matching an A2L to the firmware
+
+The EPK is the version string a tool uses to decide whether an A2L still
+describes the firmware in front of it. The A2L records both the string and the
+address it lives at:
+
+```
+EPK "V100-3b357d1d" ADDR_EPK 0x3C0F40FC
+```
+
+CANape reads that address from the target and compares. The check is only worth
+anything if the EPK changes whenever addresses can have moved, so it is
+generated rather than hand-maintained: `extra_script.py` hashes every file under
+`src/`, `include/` and `xcplite/` plus `platformio.ini` and the two build
+scripts, and writes the first 8 hex digits into `$BUILD_DIR/epk_generated.h`.
+`src/epk.cpp` composes the final EPK as `XCP_PROJECT_VERSION "-" <hash>`.
+
+This gives the properties that matter:
+
+| | |
+|---|---|
+| Source, library or build config changes | EPK changes, A2L must be regenerated |
+| Rebuild with nothing changed | EPK identical, no relink, existing A2L stays valid |
+| `touch` without an edit | EPK identical |
+| Same sources on another machine | Same EPK — the hash is content-based, not a timestamp |
+
+`__DATE__` / `__TIME__` would be the obvious shortcut and is a trap: they only
+update when the translation unit containing them is recompiled, so editing any
+*other* file moves addresses while the EPK stays put.
+
+`XCP_PROJECT_VERSION` in `include/epk.h` is the human-readable part; bump it for
+a release. A `static_assert` enforces the 31 character `XCP_EPK_MAX_LENGTH`, so
+an over-long version fails the build rather than being silently truncated.
+
+The EPK is only read from the `xcp_epk` section, so its length varies with the
+version string — see [docs/LINKER_SECTIONS.md](docs/LINKER_SECTIONS.md) for why
+that section is padded and why the length is safe to change.
+
+Note that `xcpclient` does **not** currently compare the two; the assertion is a
+`@@@@ TODO` in its source. CANape does perform the check.
 
 
 ## Project layout

@@ -18,6 +18,7 @@
 #include "xcplib.hpp" // libxcplite C++ application programming interface
 
 #include "clock64.h"
+#include "epk.h"
 #include "pressure_monitor.h"
 
 #ifdef OPTION_DISPLAY
@@ -39,9 +40,8 @@
 //----------------------------------------------------------------------------------------------------
 // Configuration
 
-// XCPlite parameters
+// XCPlite parameters. The EPK (version string) is built in epk.cpp.
 #define XCP_PROJECT_NAME "pressure_monitor"
-#define XCP_PROJECT_VERSION "V100"
 #define XCP_USE_TCP false
 #define XCP_SERVER_PORT 5555
 #define XCP_QUEUE_SIZE 0 // Fixed by OPTION_QUEUE_32_SIZE in xcplib_rtos_cfg.h for the 32 bit FreeRTOS build, this parameter is ignored
@@ -85,11 +85,16 @@ static_assert(MQTT_PUBLISH_PERIOD_MS >= MQTT_PERIOD_MIN_MS && MQTT_PUBLISH_PERIO
 static bool startXcpServer(void) {
 
     XcpSetLogLevel(XCP_LOG_LEVEL);
-    XcpCreateEpk(XCP_PROJECT_VERSION);
+
+    // Publish the EPK into the xcp_epk section, then hand the identical string
+    // to XcpInit so the runtime GET_ID reply matches what xcpclient reads from
+    // the ELF. If those two ever disagree, the A2L match check is meaningless.
+    xcpCreateEpk();
+    printf("EPK = %s\n", xcpEpk());
 
     // Initialize XCP protocol layer
     const uint8_t bindAny[4] = {0, 0, 0, 0};
-    if (!XcpInit(XCP_PROJECT_NAME, XCP_PROJECT_VERSION, XCP_MODE_LOCAL)) {
+    if (!XcpInit(XCP_PROJECT_NAME, xcpEpk(), XCP_MODE_LOCAL)) {
         printf("XcpInit failed\n");
         return false;
     }
