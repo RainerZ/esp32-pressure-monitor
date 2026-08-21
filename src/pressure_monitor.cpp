@@ -133,10 +133,10 @@ const struct parameters parameters = {
     .mqtt_publish_period_ms = MQTT_PUBLISH_PERIOD_MS,
     .min_max_reset = 0,
     .counter_max = 1000,
-    .sensor_voltage_point1 = 0.0f,
+    .sensor_voltage_point1 = 0.58775f,
     .pressure_point1 = 0.0f,
-    .sensor_voltage_point2 = 1.0f,
-    .pressure_point2 = 1.0f,
+    .sensor_voltage_point2 = 0.020 * 150 + 0.58775f,
+    .pressure_point2 = 10.0f,
 };
 
 // Bounds for the calibratable parameters
