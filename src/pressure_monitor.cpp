@@ -28,6 +28,8 @@
 
 #ifdef OPTION_ANALOG
 #include "analog.h"
+#define TEMP_CHANNEL 0
+#define PRESSURE_CHANNEL 1
 #endif
 
 #ifdef OPTION_MQTT
@@ -321,7 +323,7 @@ static void slowTask(void *parameter) {
             }
 
 #ifdef OPTION_ANALOG
-            const float voltage = analogReadChannel(0);
+            const float voltage = analogReadChannel(PRESSURE_CHANNEL);
             pressure_sensor_voltage = voltage;
             if (!isnan(voltage)) {
                 // Two-point calibration, values outside the points are extrapolated
