@@ -9,9 +9,9 @@
 #
 # Usage:
 #   tools/update_xcplite.sh                          # reuse repo+ref from xcplite/VERSION
-#   tools/update_xcplite.sh --ref V2.1.10
+#   tools/update_xcplite.sh --ref V2.2.2
 #   tools/update_xcplite.sh --repo https://github.com/RainerZ/XCPlite --ref master
-#   tools/update_xcplite.sh --repo ~/git/XCPlite-RainerZ --ref V2.1.10
+#   tools/update_xcplite.sh --repo ~/git/XCPlite-RainerZ --ref V2.2.2
 #
 # A local path is a valid --repo, which is useful for testing an upstream change
 # before it is pushed.
@@ -23,7 +23,7 @@ VENDOR_DIR="${PROJECT_DIR}/xcplite"
 VERSION_FILE="${VENDOR_DIR}/VERSION"
 
 DEFAULT_REPO="https://github.com/RainerZ/XCPlite"
-DEFAULT_REF="V2.1.10"
+DEFAULT_REF="V2.2.2"
 
 # Public API headers, copied to xcplite/inc/
 # a2l.h / a2l.hpp are deliberately absent: they are only included behind
@@ -40,15 +40,16 @@ INC_FILES=(
 SRC_FILES=(
     cal.c
     platform.c
+    sockets.c
     queue32m.c
     xcpappl.c
     xcpethserver.c
     xcpethtl.c
     xcplite.c
-
     cal.h
     dbg_print.h
     platform.h
+    sockets.h
     queue.h
     xcp.h
     xcp_cfg.h

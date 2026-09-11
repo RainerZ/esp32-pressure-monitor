@@ -11,7 +11,7 @@
 |
 |   Key differences in overrides from the defaults in xcplib_cfg.h:
 |     - Absolute memory addressing
-|     - No jumbo frames, standard Ethernet MTU of 1504 bytes (1472 bytes UDP payload)
+|     - No jumbo frames, standard Ethernet MTU of 1500 bytes (1472 bytes UDP payload)
 |     - No TCP support (not implemented yet for FreeRTOS)
 |     - Reduced memory footprint
 |     - 32 bit DAQ queue
@@ -52,7 +52,7 @@
 #define OPTION_FREERTOS_PRIORITY (tskIDLE_PRIORITY + 2U)
 
 // FreeRTOS IP stack configuration
-#define OPTION_FREERTOS_LWIP // Use the lwIP stack for FreeRTOS; requires FreeRTOS+TCP
+#define OPTION_FREERTOS_LWIP // Use the lwIP socket API for FreeRTOS
 
 //-------------------------------------------------------------------------------
 // Logging
@@ -79,8 +79,12 @@
 //-------------------------------------------------------------------------------
 // XCP server
 #undef OPTION_ENABLE_TCP // TCP support stubs not implemented yet for FreeRTOS
+// OPTION_ENABLE_UDP stays enabled: FreeRTOS targets use the lwIP socket API (OPTION_FREERTOS_LWIP above),
+// the POSIX simulator uses host sockets. For targets without any IP stack, use XCPLITE_CONFIGURATION=raw
+// (OPTION_ENABLE_UDP_RAW, hand-crafted UDP/IP over a raw Ethernet HAL) - see docs/SOCKET_RAW.md
+
 #undef OPTION_MTU
-#define OPTION_MTU 1504                    // Standard Ethernet MTU: 1504 - 32 = 1472 bytes max UDP payload (%8 aligned)
+#define OPTION_MTU 1500                    // Standard Ethernet MTU: (1500 - 28) & ~7 = 1472 bytes max UDP payload
 #undef OPTION_SERVER_FORCEFULL_TERMINATION // FreeRTOS uses vTaskDelete(NULL) to end tasks — no forceful termination
 
 //-------------------------------------------------------------------------------
@@ -91,7 +95,7 @@
 // Calibration segments are detected in XcpInit by their static descriptors and allocated from the calibration memory bump allocator
 // #undef OPTION_CAL_SEGMENTS
 
-// Calibration segments max count and total memory size for the calibration memory bump allocator 
+// Calibration segments max count and total memory size for the calibration memory bump allocator
 // (each segment needs 3 copies of its data)
 #undef OPTION_CAL_SEGMENT_COUNT
 #define OPTION_CAL_SEGMENT_COUNT 8

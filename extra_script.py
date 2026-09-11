@@ -60,6 +60,7 @@ if xcp_enabled:
     XCPLITE_SOURCES = [
         "cal.c",
         "platform.c",
+        "sockets.c",
         "queue32m.c",
         "xcpappl.c",
         "xcpethserver.c",

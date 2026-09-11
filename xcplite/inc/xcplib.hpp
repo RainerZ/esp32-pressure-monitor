@@ -13,7 +13,7 @@
 |
  ----------------------------------------------------------------------------*/
 
-#include <mutex> // for std::once_flag, std::call_once
+#include <mutex>       // for std::once_flag, std::call_once
 
 #include "xcplib_cfg.h" // for OPTION_xxx, must include the correct configuration override file XCPLIB_CFG_OVERRIDE
 #ifndef XCPLITE_CONFIGURATION

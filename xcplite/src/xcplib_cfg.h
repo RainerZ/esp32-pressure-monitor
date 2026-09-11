@@ -15,10 +15,12 @@
   The values for XCP_xxx and XCPTL_xxx define constants (in xcp_cfg.h and xcptl_cfg.h) may depend on options
 */
 
-// XCPlite version, currently V2.1.x
+// XCPlite version, currently V2.2.x
+// Keep in sync with project(xcplite VERSION ...) in CMakeLists.txt, which is what
+// find_package(xcplite) reports to a consuming project.
 #define OPTION_VERSION_MAJOR 2
-#define OPTION_VERSION_MINOR 1
-#define OPTION_VERSION_PATCH 2
+#define OPTION_VERSION_MINOR 2
+#define OPTION_VERSION_PATCH 1
 
 // CANape version compatibility
 // Disable workarounds for CANape versions < 24SP2
@@ -73,7 +75,7 @@
 
 #define OPTION_ENABLE_TCP
 #define OPTION_ENABLE_UDP
-#define OPTION_MTU 8000                     // Ethernet packet size (MTU), must be %8 - Jumbo frames supported
+#define OPTION_MTU 1500                     // IP MTU; jumbo frames support depend on path MTU in your network
 #define OPTION_SERVER_FORCEFULL_TERMINATION // Don't wait for the rx and tx thread to finish, just terminate them
 
 //-------------------------------------------------------------------------------
@@ -152,7 +154,7 @@
 // Transport layer queue, with variable queue entry size, 32 bit not lockless with mutex or critical_section synchronization
 // Mandatory for Windows and 32 bit platforms
 // #define OPTION_QUEUE_32 // (queue32.c for Windows or queue32m.c optimized for FreeRTOS)
-#if defined(OPTION_ATOMIC_EMULATION) || defined(PLATFORM_32_BIT)
+#if defined(OPTION_ATOMIC_EMULATION) || defined(PLATFORM_32BIT)
 #undef OPTION_QUEUE_64_VAR_SIZE
 #undef OPTION_QUEUE_64_FIX_SIZE
 #define OPTION_QUEUE_32
