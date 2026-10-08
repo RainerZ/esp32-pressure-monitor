@@ -100,16 +100,17 @@ XCP_COMMENT(pressure_filtered_samples, "Number of slowTask samples averaged into
 //----------------------------------------------------------------------------------------------------
 // Calibration parameters
 
-struct parameters {
-    uint32_t fast_task_period_ms;   // Period of fastTask in milliseconds
-    uint32_t slow_task_period_ms;   // Period of slowTask in milliseconds
+struct parameters
+{
+    uint32_t fast_task_period_ms;    // Period of fastTask in milliseconds
+    uint32_t slow_task_period_ms;    // Period of slowTask in milliseconds
     uint32_t mqtt_publish_period_ms; // Averaging window and MQTT publish period in milliseconds
     uint32_t min_max_reset;          // Write any different value to clear pressure_min and pressure_max
-    uint16_t counter_max;         // Wrap-around value for global_counter
-    float sensor_voltage_point1;  // Sensor voltage at calibration point 1
-    float pressure_point1;        // Pressure at calibration point 1
-    float sensor_voltage_point2;  // Sensor voltage at calibration point 2
-    float pressure_point2;        // Pressure at calibration point 2
+    uint16_t counter_max;            // Wrap-around value for global_counter
+    float sensor_voltage_point1;     // Sensor voltage at calibration point 1
+    float pressure_point1;           // Pressure at calibration point 1
+    float sensor_voltage_point2;     // Sensor voltage at calibration point 2
+    float pressure_point2;           // Pressure at calibration point 2
 };
 
 XCP_UNIT(parameters__fast_task_period_ms, "ms");
@@ -150,17 +151,16 @@ const struct parameters parameters = {
 #define MQTT_PERIOD_MAX_MS 3600000
 
 // Clamp a calibration parameter to a given value range
-#define clamp_parameter(x, y, min, max)                                                                                                                                            \
-    do {                                                                                                                                                                           \
-        if ((y) < (min))                                                                                                                                                           \
-            (x) = (min);                                                                                                                                                           \
-        else if ((y) > (max))                                                                                                                                                      \
-            (x) = (max);                                                                                                                                                           \
-        else                                                                                                                                                                       \
-            (x) = (y);                                                                                                                                                             \
+#define clamp_parameter(x, y, min, max) \
+    do                                  \
+    {                                   \
+        if ((y) < (min))                \
+            (x) = (min);                \
+        else if ((y) > (max))           \
+            (x) = (max);                \
+        else                            \
+            (x) = (y);                  \
     } while (0)
-
-
 
 #ifdef OPTION_XCP
 // Declare a calibration segment that wraps 'parameters' for thread-safe and consistent access.
@@ -171,17 +171,20 @@ const struct parameters parameters = {
 CalSegDeclRef(parameters, parameters_calseg);
 #endif
 
-
 //----------------------------------------------------------------------------------------------------
 // Tasks
 
 #ifdef OPTION_MQTT
 // Render a float as a JSON number, or as null when it is not available.
 // A bare nan is not valid JSON and would be rejected by strict parsers.
-static void formatJsonNumber(char *out, size_t len, float value) {
-    if (isnan(value)) {
+static void formatJsonNumber(char *out, size_t len, float value)
+{
+    if (isnan(value))
+    {
         snprintf(out, len, "null");
-    } else {
+    }
+    else
+    {
         snprintf(out, len, "%.6f", (double)value);
     }
 }
@@ -190,7 +193,8 @@ static void formatJsonNumber(char *out, size_t len, float value) {
 static TaskHandle_t fastTaskHandle;
 static TaskHandle_t slowTaskHandle;
 
-static bool createTask(TaskFunction_t taskCode, const char *name, const uint32_t stackDepth, UBaseType_t priority, TaskHandle_t *taskHandle) {
+static bool createTask(TaskFunction_t taskCode, const char *name, const uint32_t stackDepth, UBaseType_t priority, TaskHandle_t *taskHandle)
+{
 #ifdef TASK_CORE
     return (pdPASS == xTaskCreatePinnedToCore(taskCode, name, stackDepth, NULL, priority, taskHandle, TASK_CORE));
 #else
@@ -199,7 +203,8 @@ static bool createTask(TaskFunction_t taskCode, const char *name, const uint32_t
 }
 
 // High priority fast task
-static void fastTask(void *parameter) {
+static void fastTask(void *parameter)
+{
     (void)parameter;
 
     // Volatile keeps this local measurement variable visible in optimized builds.
@@ -215,7 +220,8 @@ static void fastTask(void *parameter) {
 #endif
 
     TickType_t lastWakeTime = xTaskGetTickCount();
-    for (;;) {
+    for (;;)
+    {
 
         uint32_t period_ms;
 
@@ -226,11 +232,11 @@ static void fastTask(void *parameter) {
         // Lock the calibration segment 'parameters' for thread-safe and consistent access.
         // There is no blocking mutex held during the lock, only atomics are used.
         {
-            #ifdef OPTION_XCP
+#ifdef OPTION_XCP
             auto params = parameters_calseg.lock();
-            #else
+#else
             auto params = &parameters;
-            #endif
+#endif
 
             // Save the task period parameter, don't delay during the lock to give XCP a chance to modify the parameters
             clamp_parameter(period_ms, params->fast_task_period_ms, FASTTASK_PERIOD_MIN_MS, FASTTASK_PERIOD_MAX_MS);
@@ -240,12 +246,14 @@ static void fastTask(void *parameter) {
             // so the offline A2L generator can discover them in the DWARF data.
             counter = counter + 1;
             static_counter = static_counter + 1;
-            if (counter > params->counter_max) {
+            if (counter > params->counter_max)
+            {
                 counter = 0;
                 static_counter = 0;
             }
             global_counter++;
-            if (global_counter > params->counter_max) {
+            if (global_counter > params->counter_max)
+            {
                 global_counter = 0;
             }
         }
@@ -261,14 +269,16 @@ static void fastTask(void *parameter) {
 
         // Sleep until next wakeup time, check for overruns
         const BaseType_t delayed = xTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(period_ms));
-        if (delayed == pdFALSE) {
+        if (delayed == pdFALSE)
+        {
             fastTaskOverruns++;
         }
     }
 }
 
 // Low priority slow task
-static void slowTask(void *parameter) {
+static void slowTask(void *parameter)
+{
     (void)parameter;
 
     volatile uint16_t counter = 0;
@@ -297,18 +307,19 @@ static void slowTask(void *parameter) {
     printf("slowTask started\n");
 
     TickType_t lastWakeTime = xTaskGetTickCount();
-    for (;;) {
+    for (;;)
+    {
 
 #ifdef OPTION_IO
         setPin2();
 #endif
 
         {
-            #ifdef OPTION_XCP
+#ifdef OPTION_XCP
             auto params = parameters_calseg.lock();
-            #else
+#else
             auto params = &parameters;
-            #endif
+#endif
 
             clamp_parameter(slow_task_period_ms, params->slow_task_period_ms, SLOWTASK_PERIOD_MIN_MS, SLOWTASK_PERIOD_MAX_MS);
             fast_task_period_ms = params->fast_task_period_ms;
@@ -318,26 +329,36 @@ static void slowTask(void *parameter) {
 #endif
 
             counter = counter + 1; // ++ on a volatile is deprecated in C++20
-            if (counter > params->counter_max) {
+            if (counter > params->counter_max)
+            {
                 counter = 0;
             }
 
 #ifdef OPTION_ANALOG
             const float voltage = analogReadChannel(PRESSURE_CHANNEL);
             pressure_sensor_voltage = voltage;
-            if (!isnan(voltage)) {
+            if (!isnan(voltage))
+            {
                 // Two-point calibration, values outside the points are extrapolated
                 const float voltageSpan = params->sensor_voltage_point2 - params->sensor_voltage_point1;
-                if (voltageSpan != 0.0f) {
+                if (voltageSpan != 0.0f)
+                {
                     pressure = params->pressure_point1 + (voltage - params->sensor_voltage_point1) * (params->pressure_point2 - params->pressure_point1) / voltageSpan;
-                } else {
+                }
+                else
+                {
                     pressure = NAN; // Degenerate calibration
                 }
-            } 
+            }
+#else
+            pressure += 0.0001;
+            if (pressure > 6.0)
+                pressure = 0;
 #endif
         } // unlock
 
-        if (min_max_reset != last_min_max_reset) {
+        if (min_max_reset != last_min_max_reset)
+        {
             last_min_max_reset = min_max_reset;
             pressure_min = NAN;
             pressure_max = NAN;
@@ -346,11 +367,14 @@ static void slowTask(void *parameter) {
         // Record the extremes at task rate, so a spike between two publishes is
         // not missed. isnan() comparisons are false, so the first valid sample
         // seeds both bounds.
-        if (!isnan(pressure)) {
-            if (isnan(pressure_min) || pressure < pressure_min) {
+        if (!isnan(pressure))
+        {
+            if (isnan(pressure_min) || pressure < pressure_min)
+            {
                 pressure_min = pressure;
             }
-            if (isnan(pressure_max) || pressure > pressure_max) {
+            if (isnan(pressure_max) || pressure > pressure_max)
+            {
                 pressure_max = pressure;
             }
         }
@@ -364,16 +388,19 @@ static void slowTask(void *parameter) {
         // XCP observes the raw signal at task rate; MQTT carries the mean over
         // the calibrated interval instead, so a slow subscriber sees a filtered
         // value rather than an arbitrary instantaneous sample.
-        if (!isnan(pressure)) {
+        if (!isnan(pressure))
+        {
             pressure_sum += (double)pressure;
             pressure_samples++;
         }
 
         // TickType_t is unsigned, so this comparison survives tick wraparound
         const TickType_t now = xTaskGetTickCount();
-        if ((TickType_t)(now - lastPublishTime) >= pdMS_TO_TICKS(mqtt_publish_period_ms)) {
+        if ((TickType_t)(now - lastPublishTime) >= pdMS_TO_TICKS(mqtt_publish_period_ms))
+        {
             lastPublishTime = now;
-            if (pressure_samples > 0) {
+            if (pressure_samples > 0)
+            {
                 pressure_filtered = (float)(pressure_sum / (double)pressure_samples);
                 pressure_filtered_samples = pressure_samples;
 
@@ -405,7 +432,8 @@ static void slowTask(void *parameter) {
 #endif
 
         const BaseType_t delayed = xTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(slow_task_period_ms));
-        if (delayed == pdFALSE) {
+        if (delayed == pdFALSE)
+        {
             slowTaskOverruns++;
         }
     }
@@ -414,16 +442,19 @@ static void slowTask(void *parameter) {
 //----------------------------------------------------------------------------------------------------
 // Init
 
-bool pressureMonitorInit(void) {
+bool pressureMonitorInit(void)
+{
 
     printf("Pressure monitor\n");
 
-    if (!createTask(fastTask, "fastTask", FASTTASK_STACKSIZE, FASTTASK_PRIORITY, &fastTaskHandle)) {
+    if (!createTask(fastTask, "fastTask", FASTTASK_STACKSIZE, FASTTASK_PRIORITY, &fastTaskHandle))
+    {
         printf("Failed to create fastTask\n");
         return false;
     }
 
-    if (!createTask(slowTask, "slowTask", SLOWTASK_STACKSIZE, SLOWTASK_PRIORITY, &slowTaskHandle)) {
+    if (!createTask(slowTask, "slowTask", SLOWTASK_STACKSIZE, SLOWTASK_PRIORITY, &slowTaskHandle))
+    {
         printf("Failed to create slowTask\n");
         return false;
     }
