@@ -131,8 +131,8 @@ XCP_UNIT(parameters__pressure_point2, "bar");
 // &parameters is the A2L file address of the calibration parameter segment 'parameters'
 // Typename and variable name must be identical for the offline A2L generator
 const struct parameters parameters = {
-    .fast_task_period_ms = 1, // 1 ms = 1000 Hz
-    .slow_task_period_ms = 2, // 2 ms = 500 Hz
+    .fast_task_period_ms = 1,  // 1 ms = 1000 Hz
+    .slow_task_period_ms = 10, // 10 ms = 100 Hz
     .mqtt_publish_period_ms = MQTT_PUBLISH_PERIOD_MS,
     .min_max_reset = 0,
     .counter_max = 1000,
@@ -147,7 +147,7 @@ const struct parameters parameters = {
 #define FASTTASK_PERIOD_MAX_MS 100
 #define SLOWTASK_PERIOD_MIN_MS 1
 #define SLOWTASK_PERIOD_MAX_MS 1000
-#define MQTT_PERIOD_MIN_MS 100
+#define MQTT_PERIOD_MIN_MS 1000
 #define MQTT_PERIOD_MAX_MS 3600000
 
 // Clamp a calibration parameter to a given value range

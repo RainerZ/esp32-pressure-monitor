@@ -2,7 +2,8 @@
 //
 // The measurement task never performs network operations. It formats a JSON
 // snapshot into a one-element mailbox, and a separate low priority task owns
-// the broker connection and publishing.
+// the broker connection and publishing. With OPTION_MQTT_SUBSCRIBE the same
+// task also receives messages; only mqtt_discovery.cpp subscribes so far.
 
 #pragma once
 

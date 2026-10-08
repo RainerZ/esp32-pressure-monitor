@@ -10,6 +10,10 @@
 #include <freertos/task.h>
 #include <stdarg.h>
 
+#ifdef OPTION_MQTT_DISCOVERY
+#include "mqtt_discovery.h"
+#endif
+
 #ifndef MQTT_BROKER_HOST
 #define MQTT_BROKER_HOST "mqtt.local"
 #endif
@@ -43,18 +47,43 @@ static bool connectMqtt() {
     snprintf(clientId, sizeof(clientId), "pressure-monitor-%06llX", static_cast<unsigned long long>(chipId & 0xFFFFFFULL));
 
 #if defined(MQTT_USERNAME) && defined(MQTT_PASSWORD)
-    const bool connected = mqttClient.connect(clientId, MQTT_USERNAME, MQTT_PASSWORD);
+    const char *username = MQTT_USERNAME;
+    const char *password = MQTT_PASSWORD;
 #else
-    const bool connected = mqttClient.connect(clientId);
+    const char *username = nullptr;
+    const char *password = nullptr;
+#endif
+
+#ifdef OPTION_MQTT_DISCOVERY
+    // Last will: the broker publishes "offline" when the connection is lost
+    const bool connected = mqttClient.connect(clientId, username, password, MQTT_AVAILABILITY_TOPIC, 0, true, MQTT_AVAILABILITY_OFFLINE);
+#else
+    const bool connected = mqttClient.connect(clientId, username, password);
 #endif
 
     if (connected) {
         Serial.printf("MQTT connected to %s:%u, topic '%s'\n", MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_TOPIC);
+#ifdef OPTION_MQTT_DISCOVERY
+        mqttDiscoveryConnected(mqttClient);
+#endif
     } else {
         Serial.printf("MQTT connection to %s:%u failed, state=%d\n", MQTT_BROKER_HOST, MQTT_BROKER_PORT, mqttClient.state());
     }
     return connected;
 }
+
+#ifdef OPTION_MQTT_SUBSCRIBE
+// Called from mqttClient.loop(), so it runs in the publisher task
+static void mqttMessageReceived(char *topic, uint8_t *payload, unsigned int length) {
+#ifdef OPTION_MQTT_DISCOVERY
+    mqttDiscoveryMessage(mqttClient, topic, payload, length);
+#else
+    (void)topic;
+    (void)payload;
+    (void)length;
+#endif
+}
+#endif
 
 static void mqttPublishTask(void *parameter) {
     (void)parameter;
@@ -95,6 +124,15 @@ static void mqttPublishTask(void *parameter) {
 }
 
 bool mqttInit(void) {
+#ifdef OPTION_MQTT_DISCOVERY
+    if (!mqttDiscoveryInit(mqttClient, MQTT_TOPIC)) {
+        return false;
+    }
+#endif
+#ifdef OPTION_MQTT_SUBSCRIBE
+    mqttClient.setCallback(mqttMessageReceived);
+#endif
+
     publishQueue = xQueueCreate(MQTT_QUEUE_LENGTH, sizeof(MqttPublishRequest));
     if (publishQueue == nullptr) {
         Serial.println("Failed to create MQTT publish queue");

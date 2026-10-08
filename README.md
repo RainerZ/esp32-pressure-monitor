@@ -133,11 +133,6 @@ The two calibration points define a straight line; values between and outside
 them are interpolated and extrapolated. If both voltage points are equal, the
 calibration is degenerate and `pressure` is set to `NaN`.
 
-Calibration changes are **lost on reset** — this build has no persistence, and
-`xcpclient` correspondingly reports `FREEZE_SUPPORTED = false`. Options for
-changing that are collected in
-[docs/CALIBRATION_PERSISTENCE.md](docs/CALIBRATION_PERSISTENCE.md).
-
 Calibration segments are accessed through a lock that uses atomics only, with no
 blocking mutex held, so XCP can rewrite parameters without disturbing task timing.
 
@@ -154,6 +149,8 @@ Everything is set through `build_flags` in [platformio.ini](platformio.ini).
 | `OPTION_IO` | Scope trigger pins |
 | `OPTION_ANALOG` | ADS1115 input; without it the sine generator is always used |
 | `OPTION_MQTT` | MQTT publisher task |
+| `OPTION_MQTT_DISCOVERY` | Home Assistant MQTT discovery and availability topic (needs `OPTION_MQTT`) |
+| `OPTION_MQTT_SUBSCRIBE` | Receive path for the MQTT task; discovery then re-announces on Home Assistant's birth message |
 
 For a board without the LilyGo display, drop `OPTION_DISPLAY` and remove
 `lovyan03/LovyanGFX` from `lib_deps`.
@@ -242,10 +239,12 @@ value. Nothing is published while every sample in an interval is `NaN`.
 
 Defaults:
 
-- Broker `192.168.0.200:1883` (set in `platformio.ini`)
+- Broker `x.x.x.x:1883` (set in `platformio.ini`)
 - Topic `pressure_monitor/measurement`
 - Payload `{"pressure":1.096658,"min":1.096375,"max":1.097125}`
 - Publish period 1000 ms, adjustable over XCP
+- With `OPTION_MQTT_DISCOVERY`: availability topic `pressure_monitor/status`
+  (`online` / `offline`, retained)
 
 Override with build flags:
 
@@ -260,6 +259,41 @@ build_flags =
 
 For a broker requiring authentication, define both `MQTT_USERNAME` and
 `MQTT_PASSWORD`. This project uses unencrypted MQTT; TLS is out of scope.
+
+#### Home Assistant discovery
+
+With `OPTION_MQTT_DISCOVERY` the node announces itself to Home Assistant as one
+device, *Pressure monitor*, with the sensors *Pressure*, *Pressure min* and
+*Pressure max*, so nothing has to be configured on the HA side.
+[src/mqtt_discovery.cpp](src/mqtt_discovery.cpp) holds all of it; `mqtt.cpp`
+only calls it at init, after each connect and for received messages.
+
+- After every connect it publishes a device based discovery message to
+  `homeassistant/device/pressure_monitor_<chip id>/config` and `online`
+  (retained) to the availability topic. The connection carries a last will, so
+  the broker publishes `offline` when the node disappears, and HA shows the
+  sensors as unavailable instead of keeping the last value.
+- Unique ids and the discovery topic are derived from the same chip id as the
+  MQTT client id, so several boards never collide in HA's device list. They
+  still need their own `MQTT_TOPIC` and `MQTT_AVAILABILITY_TOPIC`.
+- The discovery message is about 850 bytes, so PubSubClient's packet buffer
+  is enlarged from 256 to 1024 bytes.
+- With `OPTION_MQTT_SUBSCRIBE` the node subscribes to `homeassistant/status`
+  and re-announces whenever HA publishes `online` there (its birth message).
+  The config is then not retained, so a retired node leaves nothing behind on
+  the broker. Without it the node only publishes, and the config is retained
+  so that the broker hands it to HA after every HA restart.
+
+Plain MQTT subscribers are unaffected: measurement topic and payload stay the
+same. See [docs/HOME_ASSISTANT.md](docs/HOME_ASSISTANT.md) for the broker and
+HA setup.
+
+```ini
+build_flags =
+    -DMQTT_AVAILABILITY_TOPIC=\"pressure_monitor/status\"
+    -DMQTT_DISCOVERY_DEVICE_NAME=\"Pressure monitor\"
+    -DMQTT_DISCOVERY_PREFIX=\"homeassistant\"
+```
 
 ### XCP
 
@@ -300,9 +334,6 @@ update when the translation unit containing them is recompiled, so editing any
 a release. A `static_assert` enforces the 31 character `XCP_EPK_MAX_LENGTH`, so
 an over-long version fails the build rather than being silently truncated.
 
-The EPK is only read from the `xcp_epk` section, so its length varies with the
-version string — see [docs/LINKER_SECTIONS.md](docs/LINKER_SECTIONS.md) for why
-that section is padded and why the length is safe to change.
 
 `xcpclient` compares the two since XCPlite `7df1965` and warns on a mismatch:
 
@@ -330,19 +361,15 @@ src/
   display.cpp             T-Display-S3 status page
   wifi_sta.cpp            WiFi scan and connect
   mqtt.cpp                MQTT publisher task
+  mqtt_discovery.cpp      Home Assistant MQTT discovery and availability
   clock64.c               64 bit microsecond DAQ clock
   wlan.h.example          Template for the gitignored src/wlan.h
 xcplite/                  Vendored XCPlite subset (22 files), see below
 tools/update_xcplite.sh   Refreshes xcplite/ from an XCPlite repository
-docs/LINKER_SECTIONS.md   Reference notes on the XCP flash sections
-docs/CALIBRATION_PERSISTENCE.md  Deferred design discussion, not implemented
+docs/HOME_ASSISTANT.md    Mosquitto broker and Home Assistant on a Raspberry Pi
 CANape/                   CANape project and generated A2L
 ```
 
-`docs/LINKER_SECTIONS.md` explains the ESP32 flash layout this project depends
-on — what the four XCP sections are for, the two different ways `xcpclient`
-finds them, and the two ESP-IDF constraints that make the layout fragile. Read
-it before touching `extra_linker_script.py`.
 
 
 ## The XCPlite library
@@ -360,19 +387,13 @@ The subset is minimal: all 22 files are opened by the compiler on a real build.
 It is not a copy of XCPlite — the A2L generator, persistence, shared memory and
 the 64-bit queue variants are all disabled by the rtos configuration and absent.
 
-Vendoring rather than submoduling keeps the repository self-contained, avoids a
-`clone --recursive` step, and keeps library code visible to the debugger. The
-cost is that XCPlite sources live in this repository's history and updates are a
-script run rather than a `git pull`.
-
-If `xcplite/` is ever missing, `pio run` stops immediately with
-`Vendored XCPlite sources not found at .../xcplite/src. Run tools/update_xcplite.sh`.
+Vendoring rather than submoduling keeps the repository self-contained.
 
 Refresh it with:
 
 ```bash
 tools/update_xcplite.sh                 # reuse the repo and ref in xcplite/VERSION
-tools/update_xcplite.sh --ref V2.1.11   # move to another upstream ref
+tools/update_xcplite.sh --ref V2.3.2   # move to another upstream ref
 ```
 
 With no arguments the script reuses the repo and ref recorded in
@@ -381,82 +402,11 @@ is also a valid `--repo`, which is useful for testing an upstream change before
 it is pushed:
 
 ```bash
-tools/update_xcplite.sh --repo ~/git/XCPlite-RainerZ --ref V2.1.10
+tools/update_xcplite.sh --repo ~/git/XCPlite-RainerZ --ref V2.3.2
 ```
 
 The source list is defined twice, in `XCPLITE_SOURCES` in `extra_script.py` and
 in the manifest in `tools/update_xcplite.sh`. Keep them in sync.
-
-### Configuration and linker sections
-
-> Detailed background, failure modes and a diagnosis cheat sheet:
-> [docs/LINKER_SECTIONS.md](docs/LINKER_SECTIONS.md)
-
-
-The firmware uses XCPlite's `rtos` configuration:
-
-```ini
--D_FREE_RTOS
--DXCPLITE_CONFIGURATION=rtos
--DXCPLIB_CFG_OVERRIDE=\"xcplib_rtos_cfg.h\"
-```
-
-This selects absolute addressing, a 32 bit DAQ queue, a 1 us clock, and disables
-on-target A2L generation, persistence and TCP — see `xcplite/src/xcplib_rtos_cfg.h`.
-
-Offline A2L generation needs XCPlite metadata in the `xcp_cals`, `xcp_evts`,
-`xcp_epk` and `xcp_meta` sections. ESP-IDF requires `.flash.appdesc` and
-`.flash.rodata` to be adjacent, and esptool requires data sharing a flash MMU
-page to live in one ELF segment. If the XCPlite input sections are left as linker
-orphans they land between those two output sections and `firmware.bin` creation
-fails.
-
-`extra_linker_script.py` therefore generates a build-local copy of ESP-IDF's
-`sections.ld`: it collects `xcp_cals` and `xcp_evts` at the start of
-`.flash.rodata` and defines the `__start_*` / `__stop_*` boundary symbols, and
-places `xcp_epk` and `xcp_meta` immediately afterwards as individually named
-output sections. The installed PlatformIO framework files are never modified.
-
-`xcpclient` finds this metadata two different ways, which is why the layout is
-asymmetric:
-
-- `xcp_epk` and `xcp_meta` are located **by ELF section name**, so they must
-  survive as named output sections.
-- `xcp_cals` and `xcp_evts` end up merged into `.flash.rodata` and no longer
-  exist as sections with those names. `xcpclient` falls back to the
-  `__start_xcp_cals` / `__stop_xcp_cals` and `__start_xcp_evts` /
-  `__stop_xcp_evts` boundary symbols instead. Those symbols are therefore not
-  optional debug aids — without them event IDs cannot be derived and A2L
-  generation fails.
-
-**These four sections must be exactly contiguous.** esptool only merges ELF
-sections into a single image segment when no gap separates them. `xcp_epk` is
-5 bytes, so without padding it ends unaligned and the `ALIGN(8)` of `xcp_meta`
-leaves a 7 byte hole. That splits the flash rodata into two DROM segments, and
-the ESP-IDF bootloader then maps only the last one — the tiny `xcp_meta` —
-leaving all real rodata unmapped. The firmware crashes and resets on every boot,
-printing only:
-
-```
-E (209) boot: Image contains multiple DROM segments. Only the last one will be mapped.
-```
-
-The script pads each named section with a trailing `. = ALIGN(8);` to prevent
-this, and a post-build check parses the ELF and fails the build with an explicit
-error if a gap ever reappears. Do not remove either.
-
-After changing build flags, source selection, or linker behaviour, verify:
-
-```bash
-pio run
-xtensa-esp32s3-elf-readelf -S .pio/build/lilygo-t-display-s3/firmware.elf | grep -i "xcp\|flash.rodata\|appdesc"
-xtensa-esp32s3-elf-nm .pio/build/lilygo-t-display-s3/firmware.elf | grep "__start_xcp\|__stop_xcp"
-python -m esptool --chip esp32s3 image-info .pio/build/lilygo-t-display-s3/firmware.bin | grep DROM
-```
-
-`.flash.appdesc` must end exactly where `.flash.rodata` begins, `xcp_epk` and
-`xcp_meta` must still be named sections, and the image must contain exactly
-**one** DROM segment.
 
 
 ## Offline A2L generation
@@ -481,26 +431,6 @@ Expected output: the `fastTask` and `slowTask` events, the `parameters` segment
 with its eight members, global and static measurements, supported stack
 variables, the `V100` EPK, and the comments and units from the `xcp_meta` section.
 
-This needs an `xcpclient` new enough to fall back to the `__start_xcp_evts` /
-`__stop_xcp_evts` boundary symbols when no section literally named `xcp_evts`
-exists in the ELF. That fallback arrived in XCPlite commit `20175a2`, which is on
-the `V2.1.10` branch but *after* the commit labelled V2.1.10 — so build
-`xcpclient` from the branch head, not from that commit. An older `xcpclient`
-cannot derive distinct event IDs from this layout and aborts with
-`Duplicate("fastTask")` before reaching calibration and metadata registration.
-The snapshot in `xcplite/VERSION` is newer than `20175a2`, so an `xcpclient`
-built from the same ref always works.
-
-Two harmless diagnostics from `xcpclient`:
-
-- `Duplicate instance named 'pressure'` / `'pressure_sensor_voltage'` — these are
-  declared in `include/pressure_monitor.h` and defined in
-  `src/pressure_monitor.cpp`, so that translation unit's DWARF carries both a
-  declaration and a definition. The first registration wins and carries the
-  address; the A2L is correct.
-- `evaluate_exprloc: ...` errors, and the `slowTask` local `voltage` resolving to
-  the same address as `pressure_sensor_voltage` — DWARF location artifacts of the
-  optimized build. Both also occur with the upstream example.
 
 
 ## Build and upload

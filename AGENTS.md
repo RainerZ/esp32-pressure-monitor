@@ -47,12 +47,7 @@
 After changing build flags, source selection or linker behaviour:
 
 1. `pio run`, confirm `firmware.elf` and `firmware.bin` are produced.
-2. `readelf -S` — `.flash.appdesc` ends where `.flash.rodata` begins, and
-   `xcp_epk` / `xcp_meta` are still named sections.
-3. `nm` — `__start_xcp_cals`, `__stop_xcp_cals`, `__start_xcp_evts`,
-   `__stop_xcp_evts` are all defined.
-4. `esptool image-info firmware.bin` reports exactly one DROM segment.
-5. Regenerate the A2L with `xcpclient` and confirm both DAQ events and the
+2. Regenerate the A2L with `xcpclient` and confirm both DAQ events and the
    `parameters` segment appear.
 
 

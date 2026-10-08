@@ -32,7 +32,7 @@ publishes once per second        ~/mosquitto                ~/homeassistant
 | ESP32 | `192.168.8.127`, WLAN `HUAWEI-B311-7F94` (same network as the Pi's `wlan0`) |
 | MQTT topic | `pressure_monitor/measurement` |
 | Payload | `{"pressure":2.31,"min":2.29,"max":2.35}` — bar, mean/min/max over the publish interval |
-| HA web interface | <http://192.168.8.135:8123> |
+| HA web interface | <http://x.x.x.x:8123> |
 
 The broker and HA are **two independent Docker Compose projects**. The broker is
 the core of the sensor network and must keep running whether HA is used or not;
@@ -276,7 +276,7 @@ non-interactive check, `-C 3 -W 10` stops after 3 messages or 10 s.
 The broker address is a build flag in [`../platformio.ini`](../platformio.ini):
 
 ```ini
-    -DMQTT_BROKER_HOST=\"192.168.8.135\"
+    -DMQTT_BROKER_HOST=\"x.x.x.x\"
 ```
 
 It must be the Pi's address **on the network the ESP32 is in** (here the Pi's
@@ -309,10 +309,58 @@ the plain entry **MQTT**:
 Test: the MQTT integration → ⋮ → Konfigurieren → listen to topic
 `pressure_monitor/#`.
 
-### 8.2 Sensors in `configuration.yaml`
+### 8.2 Sensors via MQTT discovery (default)
 
-The firmware sends no HA discovery messages, so the sensors are declared
-manually. Append to `~/homeassistant/config/configuration.yaml` (root-owned):
+With `OPTION_MQTT_DISCOVERY` (on in `platformio.ini`) the node announces
+itself: after flashing, Einstellungen → Geräte & Dienste → MQTT shows the device
+**Pressure monitor** with *Pressure*, *Pressure min* and *Pressure max*, without
+any HA configuration. The firmware side is described in the README, section
+"Home Assistant discovery".
+
+How it works:
+
+- **Discovery topic** `homeassistant/device/pressure_monitor_<chip id>/config`:
+  one JSON message describing the device and its three sensors (state topic,
+  JSON field, unit, device class, unique ids). HA subscribes to
+  `homeassistant/#` permanently and creates the entities when it arrives.
+- **Availability** on `pressure_monitor/status`: the node publishes `online`
+  (retained) after connecting and registers `offline` as its **last will**. When
+  the node loses power or WLAN, the broker publishes `offline` after the
+  keep-alive timeout (15 s), and HA shows the sensors as *nicht verfügbar*.
+- **HA restarts**: with `OPTION_MQTT_SUBSCRIBE` the node listens to HA's birth
+  message (`online` on `homeassistant/status`) and re-announces; the config is
+  not retained. Without it, the config is retained on the broker instead.
+
+Watch it on the broker:
+
+```bash
+docker exec -it mosquitto mosquitto_sub -t 'homeassistant/#' -t 'pressure_monitor/#' -v
+```
+
+Remove a retained discovery message, e.g. of a retired board built without
+`OPTION_MQTT_SUBSCRIBE` (an empty retained message deletes it, and HA deletes
+the device):
+
+```bash
+docker exec mosquitto mosquitto_pub -t 'homeassistant/device/pressure_monitor_<chip id>/config' -r -n
+```
+
+The convention is Home Assistant's, but it is plain MQTT on separate topics:
+other subscribers of `pressure_monitor/measurement` are not affected. openHAB
+and Domoticz can read HA discovery messages as well.
+
+**Switching from the YAML sensors of 8.3 to discovery**: remove the `mqtt:`
+block from `configuration.yaml` and restart HA, then delete the old device and
+its entities (Einstellungen → Geräte & Dienste → Entitäten, they show as no
+longer provided), and only then flash the discovery firmware. Otherwise the new
+entity ids get a `_2` suffix, because the old ones are still taken.
+
+### 8.3 Alternative: sensors in `configuration.yaml`
+
+For a firmware without `OPTION_MQTT_DISCOVERY`, or another MQTT device that
+does not announce itself, the sensors are declared manually. Do not combine
+this with discovery for the same node. Append to
+`~/homeassistant/config/configuration.yaml` (root-owned):
 
 ```bash
 cd ~/homeassistant
@@ -363,7 +411,7 @@ mqtt:
 | `state_class: measurement` | Enables **long-term statistics**: 5-minute and hourly mean/min/max, kept indefinitely. Detailed history is purged after 10 days by default. |
 | `device` | Groups the three sensors as one device, "Pressure monitor". |
 
-### 8.3 Check and restart
+### 8.4 Check and restart after editing `configuration.yaml`
 
 In the web interface: Einstellungen → **Werkzeuge** → tab **YAML** → section
 "Überprüfen und neu starten" → **Konfiguration prüfen**. Expected: "Die
@@ -535,29 +583,14 @@ containers) behind; they are deleted by hand.
 | `docker compose …` says "no configuration file provided" | Wrong folder. `cd` into the project folder or use `-f <folder>/compose.yaml`. |
 | `docker stats` shows memory `0B / 0B` | Raspberry Pi OS disables the memory cgroup controller by default. Only affects statistics, not HA. |
 | HA sensors show exactly `0` | Data path works; 0 V on AIN0 with the default calibration (0 V → 0 bar). Check the sensor and ADS1115 wiring and the serial boot log. |
+| Discovered entities are named `sensor.…_2` | The YAML sensors of section 8.3 still existed when discovery arrived. Delete the old entities, then change the entity ids in the new entities' settings, or delete the new device and restart HA so the node re-announces with free ids. |
+| Device stays in HA after a board was retired | Its discovery message is retained (firmware without `OPTION_MQTT_SUBSCRIBE`). Delete it with an empty retained message, see section 8.2. |
+| `MQTT discovery publish failed` on the serial console | The packet exceeds PubSubClient's buffer (`MQTT_DISCOVERY_BUFFER_SIZE`, 1024), e.g. with long names or topics. |
 | Broker reachable from HA but logged as `172.18.0.1` | Normal: HA connects via `localhost`, which arrives through the gateway of the broker project's Docker network. |
 
 
-## 12. Open items
 
-- **Secure the broker**: a Mosquitto password file and `allow_anonymous false`,
-  plus `MQTT_USERNAME` / `MQTT_PASSWORD` in `platformio.ini` and the
-  credentials in HA's MQTT integration. Today anyone on the WLAN can read and
-  publish.
-- **MQTT discovery in the firmware**: publish retained config messages to
-  `homeassistant/sensor/…/config` at boot, plus an availability topic with a
-  last-will message. Makes the YAML in section 8.2 unnecessary and lets HA show
-  the node as unavailable when it goes offline.
-- **Fixed address for the Pi**: a DHCP reservation for `192.168.8.135` in the
-  Huawei router, so the ESP32 always finds the broker.
-- **Publish period**: 3 values per second is about 260,000 history entries per
-  day in HA. If HA does not need 1 s resolution, `MQTT_PUBLISH_PERIOD_MS=10000`
-  is plenty; XCP covers fast measurements.
-- **More nodes**: each board needs its own `MQTT_TOPIC` and its own sensor
-  block (client IDs are already unique, derived from the chip ID).
-
-
-## Cheat sheet
+## Docker cheat sheet
 
 | Task | Command |
 |---|---|
