@@ -403,6 +403,13 @@ XCPlite multi application absolute addressing: XCP_ADDRESS_MODE_XCPLITE__CXSDD (
 // Timeout for acquiring a free calibration segment page
 #define XCP_CALSEG_AQUIRE_FREE_PAGE_TIMEOUT 500 // 500 ms timeout
 
+// Number of RCU pages per calibration segment for OPTION_CAL_RCU_REFCOUNT (writer page, published page and reclamation candidates)
+// 3 is the structural minimum and needs the same memory as the lock count algorithm
+// Each additional page tolerates one more reader which never unlocks and improves the publish rate under a bursting writer, 6 is the maximum
+#ifndef XCP_CALSEG_RCU_PAGES
+#define XCP_CALSEG_RCU_PAGES 3
+#endif
+
 #endif // XCP_ENABLE_CALSEG_LIST
 
 //-------------------------------------------------------------------------------
@@ -451,6 +458,6 @@ XCPlite multi application absolute addressing: XCP_ADDRESS_MODE_XCPLITE__CXSDD (
 //-------------------------------------------------------------------------------
 // Debug
 
-// Enable extended error checks and additional asserts in the protocol layer
-// Small performance penalty (base address count and NULL pointer checks) in the inner DAQ loop !
+// Enable extended error checks in xcplite.c and cal.c
+// Small DAQ performance penalty (base address count and NULL pointer checks) in the inner DAQ loop !
 #define XCP_ENABLE_TEST_CHECKS

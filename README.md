@@ -3,10 +3,9 @@
 A pressure monitoring node for the ESP32-S3. 
 It reads a pressure sensor through an ADS1115, applies a two-point calibration, and serves the result two ways:
 
-- **MQTT** — a JSON snapshot published once per second, for logging and dashboards.
+- **MQTT** — a JSON snapshot published once per second, for logging and dashboards. Supports Home Assistent auto discovery.
 - **XCP on Ethernet** — the same signals observable in real time at task rate
-  (down to 1 ms) with CANape or `xcpclient`, including live calibration of the
-  sensor characteristic while the node keeps running.
+  (down to 1 ms) with CANape or `xcpclient`.
 
 That combination is the point of the project: MQTT gives you the slow, cheap,
 always-on data stream, while XCP lets you connect at any moment and watch the
@@ -81,15 +80,14 @@ xcpclient --udp --dest-addr 192.168.0.154 --a2l CANape/pressure_monitor.a2l --me
 ### Getting xcpclient
 
 `xcpclient` is a simple command line XCP client from [XCPlite](https://github.com/RainerZ/XCPlite).
-This project uses it for two jobs: generating the A2L from the firmware ELF, and recording measurements to CSV. 
-Note that xcpclient is not a generic A2L creator tool, it works with XCPlite only.  
+This project uses it for two jobs: generating the A2L from the firmware ELF, and recording measurements to CSV. Note that xcpclient is not a generic A2L creator tool, it works with XCPlite only.  
 
 xcpclient is a Rust program, so you need a Rust toolchain (**1.85 or newer**; install from [rustup.rs](https://rustup.rs)):
 
 ```bash
 git clone https://github.com/RainerZ/XCPlite
 cargo install --path XCPlite/tools/xcpclient
-xcpclient --version          # expect 3.0.1 or newer
+xcpclient --version
 ```
 
 `cargo install` puts the binary in `~/.cargo/bin`, which rustup adds to your `PATH`.  
@@ -97,11 +95,6 @@ xcpclient --version          # expect 3.0.1 or newer
 For the full option reference see
 [tools/xcpclient/README.md](https://github.com/RainerZ/XCPlite/blob/V2.1.10/tools/xcpclient/README.md).
 
-Notes about xcpclient:
-
-The A2L needs XCP_104.aml beside it. Moving pressure_monitor.a2l somewhere else without that file gives a bare 'Could not load A2L file' with no hint why.
-
-EPK mismatch is a warning, not an error. Make sure to regenerate the A2L after every firmware change.  
 
 
 ## Measurement and calibration
@@ -148,6 +141,7 @@ Everything is set through `build_flags` in [platformio.ini](platformio.ini).
 | `OPTION_DISPLAY` | Pressure page on the T-Display-S3 LCD (needs LovyanGFX) |
 | `OPTION_IO` | Scope trigger pins |
 | `OPTION_ANALOG` | ADS1115 input; without it the sine generator is always used |
+| `OPTION_XCP` | Enable XCP |
 | `OPTION_MQTT` | MQTT publisher task |
 | `OPTION_MQTT_DISCOVERY` | Home Assistant MQTT discovery and availability topic (needs `OPTION_MQTT`) |
 | `OPTION_MQTT_SUBSCRIBE` | Receive path for the MQTT task; discovery then re-announces on Home Assistant's birth message |
@@ -300,51 +294,6 @@ build_flags =
 Set in `src/pressure_monitor.cpp`: UDP, port `5555`, project name
 `pressure_monitor`. TCP is not supported by the XCPlite FreeRTOS build.
 
-#### EPK — matching an A2L to the firmware
-
-The EPK is the version string a tool uses to decide whether an A2L still
-describes the firmware in front of it. The A2L records both the string and the
-address it lives at:
-
-```
-EPK "V100-3b357d1d" ADDR_EPK 0x3C0F40FC
-```
-
-CANape reads that address from the target and compares. The check is only worth
-anything if the EPK changes whenever addresses can have moved, so it is
-generated rather than hand-maintained: `extra_script.py` hashes every file under
-`src/`, `include/` and `xcplite/` plus `platformio.ini` and the two build
-scripts, and writes the first 8 hex digits into `$BUILD_DIR/epk_generated.h`.
-`src/epk.cpp` composes the final EPK as `XCP_PROJECT_VERSION "-" <hash>`.
-
-This gives the properties that matter:
-
-| | |
-|---|---|
-| Source, library or build config changes | EPK changes, A2L must be regenerated |
-| Rebuild with nothing changed | EPK identical, no relink, existing A2L stays valid |
-| `touch` without an edit | EPK identical |
-| Same sources on another machine | Same EPK — the hash is content-based, not a timestamp |
-
-`__DATE__` / `__TIME__` would be the obvious shortcut and is a trap: they only
-update when the translation unit containing them is recompiled, so editing any
-*other* file moves addresses while the EPK stays put.
-
-`XCP_PROJECT_VERSION` in `include/epk.h` is the human-readable part; bump it for
-a release. A `static_assert` enforces the 31 character `XCP_EPK_MAX_LENGTH`, so
-an over-long version fails the build rather than being silently truncated.
-
-
-`xcpclient` compares the two since XCPlite `7df1965` and warns on a mismatch:
-
-```
-[WARN ] EPK mismatch: A2L file CANape/pressure_monitor.a2l has EPK 'V100-05f9c6f8',
-        target has EPK 'V100-3b357d1d'. The A2L file is outdated, addresses may be wrong.
-```
-
-It is a warning, not a hard failure, so you can still connect with a suspect A2L
-while iterating. Rebuild the A2L from the current ELF to clear it. An older
-`xcpclient` will not report anything — the comparison used to be a `@@@@ TODO`.
 
 
 ## Project layout

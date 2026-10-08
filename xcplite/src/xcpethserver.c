@@ -278,8 +278,6 @@ bool XcpEthServerStatus(void) {
 // XCP on ethernet server init
 bool XcpEthServerInit(const uint8_t *addr, uint16_t port, bool useTCP, uint32_t queue_size) {
 
-    DBG_PRINTF5("XcpEthServerInit: queue_size=%u, sizeof(gXcpServer)=%u\n", queue_size, (uint32_t)sizeof(gXcpServer));
-
     // Check and ignore, if the XCP singleton has not been initialized and activated
     if (!XcpIsActivated()) {
         DBG_PRINT5("XcpEthServerInit: XCP is deactivated!\n");
@@ -291,6 +289,8 @@ bool XcpEthServerInit(const uint8_t *addr, uint16_t port, bool useTCP, uint32_t 
         DBG_PRINT_WARNING("XCP server already running!\n");
         return false;
     }
+
+    DBG_PRINTF5("XcpEthServerInit: queue_size=%u, sizeof(gXcpServer)=%u\n", queue_size, (uint32_t)sizeof(gXcpServer));
 
     gXcpServer.transmit_thread_running = false;
     gXcpServer.receive_thread_running = false;
@@ -484,9 +484,7 @@ THREAD_FUNC_RETURN XcpServerReceiveThread(void *par) {
         uint64_t now = clockGetMonotonicNs(); // Drive the current last time with XCPTL_RECV_TIMEOUT_MS cycle in this loop
 
         // Blocking, with timeout to allow handling background tasks in this thread as well
-        // @@@@ TODO: This terminates the receive thread on ANY false return, including a merely
-        // corrupt datagram (see the dlc check in xcpethtl.c). Distinguish "fatal socket error"
-        // from "bad packet, keep serving" so a malformed frame cannot kill the server.
+        // Malformed frames are handled by the transport; false indicates a fatal socket error.
         if (!XcpEthTlHandleCommands()) {
             DBG_PRINT_ERROR("XcpEthTlHandleCommands failed!\n");
             break; // error -> terminate thread

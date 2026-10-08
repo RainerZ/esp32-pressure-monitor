@@ -11,7 +11,7 @@
 #   tools/update_xcplite.sh                          # reuse repo+ref from xcplite/VERSION
 #   tools/update_xcplite.sh --ref V2.3.2
 #   tools/update_xcplite.sh --repo https://github.com/RainerZ/XCPlite --ref master
-#   tools/update_xcplite.sh --repo ~/git/XCPlite-RainerZ --ref V2.3.2
+#   tools/update_xcplite.sh --repo ~/git/XCPlite-RainerZ --ref dev-2.3.2
 #
 # A local path is a valid --repo, which is useful for testing an upstream change
 # before it is pushed.
@@ -23,7 +23,7 @@ VENDOR_DIR="${PROJECT_DIR}/xcplite"
 VERSION_FILE="${VENDOR_DIR}/VERSION"
 
 DEFAULT_REPO="https://github.com/RainerZ/XCPlite"
-DEFAULT_REF="V2.2.2"
+DEFAULT_REF="dev-2.3.2"
 
 # Public API headers, copied to xcplite/inc/
 # a2l.h / a2l.hpp are deliberately absent: they are only included behind

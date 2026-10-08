@@ -1,6 +1,6 @@
 # Vendored XCPlite snapshot. Regenerate with tools/update_xcplite.sh.
 repo: https://github.com/RainerZ/XCPlite
-ref: V2.2.2
-commit: 66717366a406c4d6298b65be33fcdd587cda135c
-date: 2026-09-11T21:03:25+02:00
-subject: Bump version to 2.2.2
+ref: dev-2.3.2
+commit: ec58a396f26bb4dd2423f4008551364e109dbfab
+date: 2026-10-07T10:05:12+02:00
+subject: Cleanup

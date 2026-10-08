@@ -27,7 +27,7 @@
 // Human-readable part of the EPK; bump for a release. extra_script.py appends a
 // hash of the build inputs, so the EPK changes whenever addresses can have
 // moved. See the EPK section in README.md.
-#define XCP_PROJECT_VERSION "V100"
+#define XCP_PROJECT_VERSION "V200"
 
 #else
 
@@ -41,15 +41,18 @@
 #define XCP_LIMITS(name, min, max) static_assert(true, "")
 #define XCP_READ_WRITE(name) static_assert(true, "")
 
-#define DaqCreateEvent(name)                                                                                                                                                       \
-    do {                                                                                                                                                                           \
-    } while (0)
-#define DaqTriggerEvent(name)                                                                                                                                                      \
-    do {                                                                                                                                                                           \
-    } while (0)
-#define DaqCreateAndTriggerEvent(name)                                                                                                                                             \
-    do {                                                                                                                                                                           \
-    } while (0)
+#define DaqCreateEvent(name) \
+  do                         \
+  {                          \
+  } while (0)
+#define DaqTriggerEvent(name) \
+  do                          \
+  {                           \
+  } while (0)
+#define DaqCreateAndTriggerEvent(name) \
+  do                                   \
+  {                                    \
+  } while (0)
 
 #define xcp_get_frame_addr() ((void *)0)
 
@@ -57,24 +60,27 @@
 // parameters, so the tasks read the default page directly and no locking is
 // needed. The lock()/operator-> shape matches the real handle, so the task code
 // does not change.
-template <typename T> class XcpCalSegStub {
+template <typename T>
+class XcpCalSegStub
+{
+public:
+  explicit XcpCalSegStub(const T &data) : _data(data) {}
+
+  class Guard
+  {
   public:
-    explicit XcpCalSegStub(const T &data) : _data(data) {}
-
-    class Guard {
-      public:
-        explicit Guard(const T &data) : _data(data) {}
-        const T *operator->() const { return &_data; }
-        const T &operator*() const { return _data; }
-
-      private:
-        const T &_data;
-    };
-
-    Guard lock() const { return Guard(_data); }
+    explicit Guard(const T &data) : _data(data) {}
+    const T *operator->() const { return &_data; }
+    const T &operator*() const { return _data; }
 
   private:
     const T &_data;
+  };
+
+  Guard lock() const { return Guard(_data); }
+
+private:
+  const T &_data;
 };
 
 #define CalSegDeclRef(name, handle) static const XcpCalSegStub<struct name> handle(name)
@@ -103,9 +109,5 @@ const char *xcpStatusText(void);
 inline bool xcpInit(void) { return true; }
 inline const char *xcpEpk(void) { return "no-xcp"; }
 inline const char *xcpStatusText(void) { return nullptr; }
-
-#define XCP_COMMENT(a,b)
-#define XCP_UNIT(a,b)
-
 
 #endif

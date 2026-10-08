@@ -15,11 +15,11 @@
   The values for XCP_xxx and XCPTL_xxx define constants (in xcp_cfg.h and xcptl_cfg.h) may depend on options
 */
 
-// XCPlite version, currently V2.2.x
+// XCPlite version, currently V2.3.x
 // Keep in sync with project(xcplite VERSION ...) in CMakeLists.txt, which is what
 // find_package(xcplite) reports to a consuming project.
 #define OPTION_VERSION_MAJOR 2
-#define OPTION_VERSION_MINOR 2
+#define OPTION_VERSION_MINOR 3
 #define OPTION_VERSION_PATCH 1
 
 // CANape version compatibility
@@ -92,6 +92,20 @@
 // Must be large enough for all XcpCreateCalSeg() calls combined
 #define OPTION_CAL_MEM_SIZE (1024 * 5) // 5 KB default
 
+// RCU algorithm for calibration segment updates, see docs/CAL_RCU.md
+// Defined: Publishing does not depend on reader progress
+//  - Changes are visible with the next lock
+//  - The lock is lock-free (but not wait-free, retries when a publish happens concurrently)
+//  - Slightly more complex cache synchronisation
+//  - Not recommended for micro controller (FreeRTOS) use cases due to potential performance issues
+//  - Recommended for slow reader, configuration parameter use-cases, not typical calibration use-cases
+// Undefined (default): Publishing depends on the lock count returning to zero
+//  - Changes are visible with the first or second first level lock
+//  - The lock is wait-free
+// The reader API is identical, except XcpUnlockCalSeg() needs the page pointer returned by XcpLockCalSeg()
+// The C++ API is not affected, the C examples have not been adapted for the API change, the tests are adapted
+// #define OPTION_CAL_RCU_REFCOUNT
+
 // Single page mode
 // #define OPTION_CAL_SEGMENTS_SINGLE_PAGE
 
@@ -135,8 +149,9 @@
 // 6 bytes per measurement signal (ODT entry) needed
 #define OPTION_DAQ_MEM_SIZE (512 * 6)
 
-// Create an cyclic DAQ event for asynchronous data acquisition
-// Needs OPTION_DAQ_EVENT_LIST
+// Create an cyclic default DAQ event with event id=0 for asynchronous data acquisition
+// May be used as default_event for xcpclient, since xcpclient V4.x explicitly specified as commandline option
+// (Needs OPTION_DAQ_EVENT_LIST)
 // #define OPTION_DAQ_ASYNC_EVENT
 
 // Transport layer queue, vectored IO, lockless with variable queue entry size
@@ -161,15 +176,43 @@
 #endif
 
 //-------------------------------------------------------------------------------
-// A2L generation settings
+// Runtime A2L generation and upload
 
 #define OPTION_ENABLE_A2L_GENERATOR // Enable A2L generator
 #define OPTION_ENABLE_A2L_UPLOAD    // Enable A2L upload via XCP
-#define OPTION_ENABLE_ELF_UPLOAD    // Enable ELF upload via XCP
 
 // Enable socketGetLocalAddr for A2L file generation
 // Used for convenience to get an existing ip address in A2L, when bound to ANY 0.0.0.0
 // #define OPTION_ENABLE_GET_LOCAL_ADDR
+
+//-------------------------------------------------------------------------------
+// Buildtime A2L generation
+
+// Registration at compile and link time for events (data acquisition, section xcp_evts) and calibration segments (calibration, section xcp_cals).
+// On:
+// The event id and the segment number are the positions of the descriptors in the sections.
+// Stable for a build.
+// The offline A2L generator (xcpclient --elf) reads the sections.
+// Requires a platform with ELF or Mach-O sections (not MSVC), mandatory if OPTION_DAQ_EVENT_LIST is off (configurations no_a2l and rtos).
+// Event and calibration segment numbering independant of event creation order
+// Off:
+// Events and segments are created at runtime (DaqCreateEvent, CalSegCreate) in creation order.
+// The trigger macros look up the event by name once, so events may be created anywhere in the application.
+// Event and calibration segment numbering is dependant on event creation order (on each application start or once on initial creation order if persistence is enabled)
+
+// #define OPTION_SECTION_REGISTRATION // Default is Off
+
+// With section registration off, the macros for event and calibration segment creation still work, but events and segments are created at runtime at the call site, not at compile
+// and link time and in XcpInit This may lead to unstable event and calibration segment numbering across application runs, when OPTION_PERSISTENCE is not enabled. The C macros
+// still create static marker variables to help offline A2L generators
+// DaqCreateEvent and its variants:
+//   static const tXcpEventDescriptor evt__##event_name = <event_descriptor>; // at the call site of DaqCreateEvent
+// DaqTriggerEvent and its variants:
+//   static tXcpEventId trg__AAS__##event_name = <event_id>; // at the call site of DaqTriggerEvent
+// C and C++ CalSegCreate, CalSegDecl, C++ CalSegDeclRef:
+//   static const tXcpCalSegDescriptor cal__##calseg_name = <calseg_descriptor>;
+
+// #define OPTION_ENABLE_ELF_UPLOAD // User defined command: xcpclient can upload ELF via XCP
 
 //-------------------------------------------------------------------------------
 // Tests
@@ -179,7 +222,8 @@
 // #define TEST_CLOCK_GET_STATISTIC // Count number of calls to clockGet and clockGetLast, print results with clockPrintStatistic()
 // #define TEST_ACQUIRE_SPIN_COUNT // Get max spin count of the queue acquire operations
 // #define TEST_ACQUIRE_LOCK_TIMING // Create a queue acquire time histogram, prints results on queue deinit, significant performance impact, for testing only !!!!!!!!!!
-// #define TEST_ENABLE_DBG_METRICS  // Enable debug metrics for XCP events and transport layer packets
+// #define TEST_ENABLE_TL_METRICS  // Enable debug metrics for XCP transport layer packets
+// #define TEST_ENABLE_CAL_METRICS // Enable debug metrics for XCP calibration
 // #define TEST_ENABLE_BUFFERCOUNT_HISTOGRAM // Enable histogram of the used buffer counts in the transport layer vectored io
 // #define TEST_MUTABLE_ACCESS_OWNERSHIP // Enable tracking of mutable access thread ownership to detect overseen potential memory safety problems
 // #define TEST_ENABLE_DBG_CHECKS // Enable timing checks in the XCP server
@@ -191,9 +235,19 @@
 // Overrides
 
 // Optional application-specific override — patches any of the above defaults.
-// Pass the filename of your override header via:
-//   cmake: target_compile_definitions(xcplite PRIVATE "XCPLIB_CFG_OVERRIDE=\"my_xcplib_overrides.h\"")
-// See xcplib_rtos_cfg.h and xcplib_no_a2l_cfg.h for example override files.
+// The header is selected at build time and must be seen identically by the library and the application:
+//   cmake: -DXCPLITE_CFG_OVERRIDE=/path/to/xcplib_app_cfg.h  (or set(XCPLITE_CFG_OVERRIDE ...) before
+//          add_subdirectory/FetchContent_MakeAvailable), which defines XCPLIB_CFG_OVERRIDE as a PUBLIC
+//          usage requirement of the xcplite target and adds the header's directory to the include path.
+// See xcplib_rtos_cfg.h and xcplib_no_a2l_cfg.h (shipped configurations) and
+// examples/fetchcontent_example/config/xcplib_app_cfg.h for example override files.
 #ifdef XCPLIB_CFG_OVERRIDE
 #include XCPLIB_CFG_OVERRIDE
+#endif
+
+//-------------------------------------------------------------------------------
+// Configuration checks
+
+#if defined(OPTION_SECTION_REGISTRATION) && (defined(_MSC_VER) || defined(OPTION_SHM))
+#error "OPTION_SECTION_REGISTRATION (link time registration of events and calibration segments) is not supported"
 #endif
