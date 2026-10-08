@@ -60,20 +60,21 @@ xcpclient works with ELF or A2L files.
 
 
 ```bash
-xcpclient --udp --dest-addr 192.168.0.154  --elf .pio/build/lilygo-t-display-s3/firmware.elf --mea '^pressure$' --csv pressure_monitor.csv
+xcpclient --udp --dest-addr 192.168.8.127  --elf .pio/build/lilygo-t-display-s3/firmware.elf --elf-unit-filter pressure_monitor --default-event=0 --mea '^pressure$' --csv pressure_monitor.csv
 ```
 
 
 Generate the A2L file from the firmware ELF for CANape or other XCP/A2L compliant tools:
 
 ```bash
-xcpclient --offline --udp --dest-addr 192.168.0.154 --elf .pio/build/lilygo-t-display-s3/firmware.elf --a2l CANape/pressure_monitor.a2l --elf-unit-filter pressure_monitor
+xcpclient --offline --udp --dest-addr 192.168.0.154 --elf .pio/build/lilygo-t-display-s3/firmware.elf --a2l CANape/pressure_monitor.a2l --elf-unit-filter pressure_monitor --default-event=0
 ```
 
 Start a test measurement with xcpclient and the A2L file and print to terminal
 
 ```bash
-xcpclient --udp --dest-addr 192.168.0.154 --a2l CANape/pressure_monitor.a2l --mea pressure --verbose 2
+xcpclient --udp --dest-addr 192.168.8.127 --a2l CANape/pressure_monitor.a2l --default-event=0  --mea pressure
+
 ```
 
 
@@ -365,10 +366,7 @@ so the A2L is produced from the firmware ELF on the host with `xcpclient` from
 the XCPlite repository:
 
 ```bash
-xcpclient --offline --udp --dest-addr <esp32-ip> \
-  --elf .pio/build/lilygo-t-display-s3/firmware.elf \
-  --a2l CANape/pressure_monitor.a2l \
-  --elf-unit-filter pressure_monitor --log-level=3
+xcpclient --offline --udp --dest-addr 192.168.8.135 --elf .pio/build/lilygo-t-display-s3/firmware.elf --a2l CANape/pressure_monitor.a2l --elf-unit-filter pressure_monitor
 ```
 
 `--elf-unit-filter pressure_monitor` restricts the A2L to this application
@@ -409,8 +407,9 @@ ping <esp32-ip>
 The XCP server listens on UDP port 5555. A basic connection test:
 
 ```bash
-xcpclient --udp --dest-addr <esp32-ip>
+xcpclient --udp --dest-addr 192.168.8.135
 ```
+
 
 
 
