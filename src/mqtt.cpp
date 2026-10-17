@@ -33,7 +33,8 @@ static constexpr UBaseType_t MQTT_TASK_PRIORITY = 1;
 
 static_assert(MQTT_QUEUE_LENGTH == 1, "The MQTT queue is a latest-value mailbox and must have length 1");
 
-struct MqttPublishRequest {
+struct MqttPublishRequest
+{
     char payload[MQTT_PAYLOAD_MAX_LENGTH + 1];
 };
 
@@ -41,7 +42,8 @@ static WiFiClient mqttNetworkClient;
 static PubSubClient mqttClient(mqttNetworkClient);
 static QueueHandle_t publishQueue = nullptr;
 
-static bool connectMqtt() {
+static bool connectMqtt()
+{
     char clientId[40];
     const uint64_t chipId = ESP.getEfuseMac();
     snprintf(clientId, sizeof(clientId), "pressure-monitor-%06llX", static_cast<unsigned long long>(chipId & 0xFFFFFFULL));
@@ -61,20 +63,24 @@ static bool connectMqtt() {
     const bool connected = mqttClient.connect(clientId, username, password);
 #endif
 
-    if (connected) {
-        Serial.printf("MQTT connected to %s:%u, topic '%s'\n", MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_TOPIC);
+    if (connected)
+    {
+        printf("MQTT connected to %s:%u, topic '%s'\n", MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_TOPIC);
 #ifdef OPTION_MQTT_DISCOVERY
         mqttDiscoveryConnected(mqttClient);
 #endif
-    } else {
-        Serial.printf("MQTT connection to %s:%u failed, state=%d\n", MQTT_BROKER_HOST, MQTT_BROKER_PORT, mqttClient.state());
+    }
+    else
+    {
+        printf("MQTT connection to %s:%u failed, state=%d\n", MQTT_BROKER_HOST, MQTT_BROKER_PORT, mqttClient.state());
     }
     return connected;
 }
 
 #ifdef OPTION_MQTT_SUBSCRIBE
 // Called from mqttClient.loop(), so it runs in the publisher task
-static void mqttMessageReceived(char *topic, uint8_t *payload, unsigned int length) {
+static void mqttMessageReceived(char *topic, uint8_t *payload, unsigned int length)
+{
 #ifdef OPTION_MQTT_DISCOVERY
     mqttDiscoveryMessage(mqttClient, topic, payload, length);
 #else
@@ -85,35 +91,47 @@ static void mqttMessageReceived(char *topic, uint8_t *payload, unsigned int leng
 }
 #endif
 
-static void mqttPublishTask(void *parameter) {
+static void mqttPublishTask(void *parameter)
+{
     (void)parameter;
 
     MqttPublishRequest pendingRequest = {};
     bool publishPending = false;
     uint32_t lastReconnectAttemptMs = millis() - MQTT_RECONNECT_PERIOD_MS;
 
-    for (;;) {
+    for (;;)
+    {
         MqttPublishRequest requestedPublish;
-        if (xQueueReceive(publishQueue, &requestedPublish, 0) == pdTRUE) {
+        if (xQueueReceive(publishQueue, &requestedPublish, 0) == pdTRUE)
+        {
             pendingRequest = requestedPublish;
             publishPending = true;
         }
 
         const uint32_t now = millis();
-        if (WiFi.status() == WL_CONNECTED) {
-            if (!mqttClient.connected()) {
-                if (now - lastReconnectAttemptMs >= MQTT_RECONNECT_PERIOD_MS) {
+        if (WiFi.status() == WL_CONNECTED)
+        {
+            if (!mqttClient.connected())
+            {
+                if (now - lastReconnectAttemptMs >= MQTT_RECONNECT_PERIOD_MS)
+                {
                     lastReconnectAttemptMs = now;
                     connectMqtt();
                 }
-            } else {
+            }
+            else
+            {
                 mqttClient.loop();
 
-                if (publishPending) {
-                    if (mqttClient.publish(MQTT_TOPIC, pendingRequest.payload)) {
+                if (publishPending)
+                {
+                    if (mqttClient.publish(MQTT_TOPIC, pendingRequest.payload))
+                    {
                         publishPending = false;
-                    } else {
-                        Serial.printf("MQTT publish failed, state=%d\n", mqttClient.state());
+                    }
+                    else
+                    {
+                        printf("MQTT publish failed, state=%d\n", mqttClient.state());
                     }
                 }
             }
@@ -123,9 +141,11 @@ static void mqttPublishTask(void *parameter) {
     }
 }
 
-bool mqttInit(void) {
+bool mqttInit(void)
+{
 #ifdef OPTION_MQTT_DISCOVERY
-    if (!mqttDiscoveryInit(mqttClient, MQTT_TOPIC)) {
+    if (!mqttDiscoveryInit(mqttClient, MQTT_TOPIC))
+    {
         return false;
     }
 #endif
@@ -134,8 +154,9 @@ bool mqttInit(void) {
 #endif
 
     publishQueue = xQueueCreate(MQTT_QUEUE_LENGTH, sizeof(MqttPublishRequest));
-    if (publishQueue == nullptr) {
-        Serial.println("Failed to create MQTT publish queue");
+    if (publishQueue == nullptr)
+    {
+        printf("Failed to create MQTT publish queue\n");
         return false;
     }
 
@@ -143,18 +164,21 @@ bool mqttInit(void) {
     mqttClient.setSocketTimeout(2);
 
     TaskHandle_t taskHandle = nullptr;
-    if (xTaskCreate(mqttPublishTask, "mqttPublish", MQTT_TASK_STACK_SIZE, nullptr, MQTT_TASK_PRIORITY, &taskHandle) != pdPASS) {
+    if (xTaskCreate(mqttPublishTask, "mqttPublish", MQTT_TASK_STACK_SIZE, nullptr, MQTT_TASK_PRIORITY, &taskHandle) != pdPASS)
+    {
         vQueueDelete(publishQueue);
         publishQueue = nullptr;
-        Serial.println("Failed to create MQTT publish task");
+        printf("Failed to create MQTT publish task\n");
         return false;
     }
 
     return true;
 }
 
-bool mqttRequestPublish(const char *format, ...) {
-    if (publishQueue == nullptr || format == nullptr) {
+bool mqttRequestPublish(const char *format, ...)
+{
+    if (publishQueue == nullptr || format == nullptr)
+    {
         return false;
     }
 
@@ -164,7 +188,8 @@ bool mqttRequestPublish(const char *format, ...) {
     const int length = vsnprintf(request.payload, sizeof(request.payload), format, args);
     va_end(args);
 
-    if (length < 0 || static_cast<size_t>(length) >= sizeof(request.payload)) {
+    if (length < 0 || static_cast<size_t>(length) >= sizeof(request.payload))
+    {
         return false;
     }
 
@@ -175,7 +200,8 @@ bool mqttRequestPublish(const char *format, ...) {
 
 bool mqttInit(void) { return false; }
 
-bool mqttRequestPublish(const char *format, ...) {
+bool mqttRequestPublish(const char *format, ...)
+{
     (void)format;
     return false;
 }

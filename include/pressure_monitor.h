@@ -4,6 +4,7 @@
 //   OPTION_DISPLAY  Status output on the LilyGo T-Display-S3 LCD
 //   OPTION_IO       Scope trigger pins for both tasks
 //   OPTION_ANALOG   ADS1115 pressure sensor input (sine generator when absent)
+//   OPTION_TEMPERATUR DS18B20 temperature sensor
 //   OPTION_MQTT     Periodic publishing of the measurement to an MQTT broker
 
 #pragma once

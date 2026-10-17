@@ -2,12 +2,13 @@
 //
 // Layout, 320x170 in landscape:
 //
-//   status                          192.168.0.154   XCP
+//   status                          192.168.0.x   XCP
 //
 //     1.08 bar                      <- large, the value you actually read
 //
-//   [========|                  ]   <- current value within the recorded range
-//   min 1.079                 max 1.093
+//   [========|                  ]   <- current value on a fixed scale
+//   0                                6
+//   Temp  21.4 C                    <- only with OPTION_TEMPERATUR
 //
 // Flicker is avoided two ways: the whole page is redrawn at most once per
 // DISPLAY_PERIOD_MS, and every field is drawn with an opaque text background in
@@ -31,13 +32,15 @@
 #include "analog.h"
 #endif
 
-class Display : public lgfx::LGFX_Device {
+class Display : public lgfx::LGFX_Device
+{
     lgfx::Bus_Parallel8 _bus;
     lgfx::Panel_ST7789 _panel;
     lgfx::Light_PWM _light;
 
-  public:
-    Display() {
+public:
+    Display()
+    {
         {
             auto cfg = _bus.config();
             cfg.freq_write = 20000000;
@@ -104,24 +107,28 @@ static constexpr int32_t VALUE_X = 14;
 static constexpr int32_t VALUE_Y = 38;
 static constexpr int32_t BAR_X = 14;
 static constexpr int32_t BAR_H = 14;
-static constexpr int32_t BAR_Y = 104;
-static constexpr int32_t LABEL_Y = 130;
+// The panel is 170 pixels high: the value ends at 86, and the bar and its
+// scale sit just high enough to leave a 16 pixel line for the temperature.
+static constexpr int32_t BAR_Y = 97;
+static constexpr int32_t LABEL_Y = 117;
+static constexpr int32_t TEMP_Y = 143;
 
 static constexpr uint16_t COLOR_BG = TFT_BLACK;
 static constexpr uint16_t COLOR_VALUE = TFT_WHITE;
 static constexpr uint16_t COLOR_UNIT = TFT_DARKGREY;
 static constexpr uint16_t COLOR_STATUS = TFT_DARKGREY;
-static constexpr uint16_t COLOR_MIN = TFT_CYAN;
-static constexpr uint16_t COLOR_MAX = TFT_ORANGE;
+static constexpr uint16_t COLOR_SCALE = TFT_DARKGREY;
 static constexpr uint16_t COLOR_BAR = TFT_GREEN;
 static constexpr uint16_t COLOR_BAR_TRACK = TFT_DARKGREY;
 static constexpr uint16_t COLOR_ALERT = TFT_RED;
+static constexpr uint16_t COLOR_TEMP = TFT_CYAN;
 
 // Cached rendering, so unchanged fields are not redrawn
 static char lastStatus[32] = "";
 static char lastValue[16] = "";
-static char lastMin[16] = "";
-static char lastMax[16] = "";
+#ifdef OPTION_TEMPERATUR
+static char lastTemperature[16] = "";
+#endif
 static int32_t lastMarker = -2; // -1 means 'no value'; -2 forces the first draw
 static uint32_t lastRenderMs = 0;
 
@@ -129,7 +136,8 @@ static int32_t barWidth(void) { return lcd.width() - 2 * BAR_X; }
 
 // Draw text with an opaque background so it overwrites whatever was there.
 // Callers pass fixed-width strings, so no separate clear is needed.
-static void drawText(int32_t x, int32_t y, int32_t size, uint16_t color, const char *text) {
+static void drawText(int32_t x, int32_t y, int32_t size, uint16_t color, const char *text)
+{
     lcd.setTextSize(size);
     lcd.setTextColor(color, COLOR_BG);
     lcd.setCursor(x, y);
@@ -142,15 +150,20 @@ static void drawText(int32_t x, int32_t y, int32_t size, uint16_t color, const c
 // tail of the longer one behind.
 #define PRESSURE_FIELD_WIDTH 6
 
-static void formatPressure(char *out, size_t len, float value, int decimals) {
-    if (isnan(value)) {
+static void formatPressure(char *out, size_t len, float value, int decimals)
+{
+    if (isnan(value))
+    {
         snprintf(out, len, "%*s", PRESSURE_FIELD_WIDTH, "---");
-    } else {
+    }
+    else
+    {
         snprintf(out, len, "%*.*f", PRESSURE_FIELD_WIDTH, decimals, (double)value);
     }
 }
 
-void displayInit(void) {
+void displayInit(void)
+{
     pinMode(LCD_POWER_ON, OUTPUT);
     digitalWrite(LCD_POWER_ON, HIGH);
     lcdMutex = xSemaphoreCreateMutex();
@@ -160,14 +173,28 @@ void displayInit(void) {
     lcd.fillScreen(COLOR_BG);
     lcd.setTextWrap(false);
 
-    // Static labels that never change
-    drawText(BAR_X, LABEL_Y, LABEL_SIZE, COLOR_MIN, "min");
-    const int32_t maxLabelW = 3 * GLYPH_W * LABEL_SIZE;
-    drawText(lcd.width() - BAR_X - maxLabelW - 6 * GLYPH_W * LABEL_SIZE, LABEL_Y, LABEL_SIZE, COLOR_MAX, "max");
+    // Scale labels at both ends of the bar, they never change
+    char label[16];
+    snprintf(label, sizeof(label), "%g", (double)DISPLAY_BAR_MIN);
+    drawText(BAR_X, LABEL_Y, LABEL_SIZE, COLOR_SCALE, label);
+    snprintf(label, sizeof(label), "%g", (double)DISPLAY_BAR_MAX);
+    drawText(lcd.width() - BAR_X - (int32_t)strlen(label) * GLYPH_W * LABEL_SIZE, LABEL_Y, LABEL_SIZE, COLOR_SCALE, label);
+
+#ifdef OPTION_TEMPERATUR
+    // Label and unit of the temperature line; the value in between is rendered
+    // as a fixed 5 character field. The built-in font has no degree sign, so it
+    // is drawn as a small circle.
+    drawText(BAR_X, TEMP_Y, LABEL_SIZE, COLOR_SCALE, "Temp");
+    const int32_t unitX = BAR_X + 11 * GLYPH_W * LABEL_SIZE;
+    lcd.drawCircle(unitX + 4, TEMP_Y + 3, 2, COLOR_SCALE);
+    drawText(unitX + 9, TEMP_Y, LABEL_SIZE, COLOR_SCALE, "C");
+#endif
 }
 
-void displayError(const char *text) {
-    if (lcdMutex == nullptr || xSemaphoreTake(lcdMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+void displayError(const char *text)
+{
+    if (lcdMutex == nullptr || xSemaphoreTake(lcdMutex, pdMS_TO_TICKS(50)) != pdTRUE)
+    {
         return;
     }
     lcd.fillRect(0, VALUE_Y, lcd.width(), 48, COLOR_BG);
@@ -175,29 +202,29 @@ void displayError(const char *text) {
     xSemaphoreGive(lcdMutex);
 }
 
-static void renderStatus(void) {
+static void renderStatus(void)
+{
     char status[32];
 
-#ifdef OPTION_ANALOG
-    if (!analogIsPresent()) {
-        // Without a converter the value shown is a generated sine wave, so say
-        // so rather than letting it pass for a real measurement
-        snprintf(status, sizeof(status), "%-21s", "NO SENSOR - sine sim");
-    } else
-#endif
 #ifdef OPTION_XCP
-    if (xcpStatusText() != nullptr) {
+    if (xcpStatusText() != nullptr)
+    {
         // A tool is attached; show that instead of the address
         snprintf(status, sizeof(status), "%-21s", xcpStatusText());
-    } else 
+    }
+    else
 #endif
-    if (WiFi.status() == WL_CONNECTED) {
+        if (WiFi.status() == WL_CONNECTED)
+    {
         snprintf(status, sizeof(status), "%-21s", WiFi.localIP().toString().c_str());
-    } else {
+    }
+    else
+    {
         snprintf(status, sizeof(status), "%-21s", "no network");
     }
 
-    if (strcmp(status, lastStatus) != 0) {
+    if (strcmp(status, lastStatus) != 0)
+    {
         strncpy(lastStatus, status, sizeof(lastStatus) - 1);
         lastStatus[sizeof(lastStatus) - 1] = '\0';
 #ifdef OPTION_ANALOG
@@ -209,11 +236,13 @@ static void renderStatus(void) {
     }
 }
 
-static void renderValue(float pressure) {
+static void renderValue(float pressure)
+{
     char value[16];
     formatPressure(value, sizeof(value), pressure, 2);
 
-    if (strcmp(value, lastValue) != 0) {
+    if (strcmp(value, lastValue) != 0)
+    {
         strncpy(lastValue, value, sizeof(lastValue) - 1);
         lastValue[sizeof(lastValue) - 1] = '\0';
         drawText(VALUE_X, VALUE_Y, VALUE_SIZE, COLOR_VALUE, value);
@@ -223,63 +252,87 @@ static void renderValue(float pressure) {
     }
 }
 
-static void renderRange(float pressure, float pressureMin, float pressureMax) {
-    char text[16];
+static_assert(DISPLAY_BAR_MAX > DISPLAY_BAR_MIN, "DISPLAY_BAR_MAX must be above DISPLAY_BAR_MIN");
 
-    formatPressure(text, sizeof(text), pressureMin, 3);
-    if (strcmp(text, lastMin) != 0) {
-        strncpy(lastMin, text, sizeof(lastMin) - 1);
-        lastMin[sizeof(lastMin) - 1] = '\0';
-        drawText(BAR_X + 4 * GLYPH_W * LABEL_SIZE, LABEL_Y, LABEL_SIZE, COLOR_MIN, text);
-    }
-
-    formatPressure(text, sizeof(text), pressureMax, 3);
-    if (strcmp(text, lastMax) != 0) {
-        strncpy(lastMax, text, sizeof(lastMax) - 1);
-        lastMax[sizeof(lastMax) - 1] = '\0';
-        drawText(lcd.width() - BAR_X - 6 * GLYPH_W * LABEL_SIZE, LABEL_Y, LABEL_SIZE, COLOR_MAX, text);
-    }
-
-    // Bar: how far the current value sits between the recorded extremes
+static void renderBar(float pressure)
+{
+    // Bar: where the current value sits on the fixed scale, clamped at both ends
     int32_t marker = -1;
-    if (!isnan(pressure) && !isnan(pressureMin) && !isnan(pressureMax)) {
-        const float span = pressureMax - pressureMin;
-        // A degenerate range (only one distinct sample so far) reads as full
-        const float fraction = (span > 0.0f) ? ((pressure - pressureMin) / span) : 1.0f;
+    if (!isnan(pressure))
+    {
+        const float fraction = (pressure - DISPLAY_BAR_MIN) / (DISPLAY_BAR_MAX - DISPLAY_BAR_MIN);
         marker = (int32_t)(fraction * (float)(barWidth() - 2));
-        if (marker < 0) {
+        if (marker < 0)
+        {
             marker = 0;
-        } else if (marker > barWidth() - 2) {
+        }
+        else if (marker > barWidth() - 2)
+        {
             marker = barWidth() - 2;
         }
     }
 
-    if (marker != lastMarker) {
+    if (marker != lastMarker)
+    {
         lastMarker = marker;
         lcd.drawRect(BAR_X, BAR_Y, barWidth(), BAR_H, COLOR_BAR_TRACK);
-        if (marker >= 0) {
+        if (marker >= 0)
+        {
             lcd.fillRect(BAR_X + 1, BAR_Y + 1, marker, BAR_H - 2, COLOR_BAR);
             lcd.fillRect(BAR_X + 1 + marker, BAR_Y + 1, barWidth() - 2 - marker, BAR_H - 2, COLOR_BG);
-        } else {
+        }
+        else
+        {
             lcd.fillRect(BAR_X + 1, BAR_Y + 1, barWidth() - 2, BAR_H - 2, COLOR_BG);
         }
     }
 }
 
-void displayUpdate(float pressure, float pressureMin, float pressureMax) {
+#ifdef OPTION_TEMPERATUR
+static void renderTemperature(float temperature)
+{
+    // The DS18B20 range is -55 to 125, so 5 characters always fit
+    char text[16];
+    if (isnan(temperature))
+    {
+        snprintf(text, sizeof(text), "%5s", "---");
+    }
+    else
+    {
+        snprintf(text, sizeof(text), "%5.1f", (double)temperature);
+    }
+
+    if (strcmp(text, lastTemperature) != 0)
+    {
+        strncpy(lastTemperature, text, sizeof(lastTemperature) - 1);
+        lastTemperature[sizeof(lastTemperature) - 1] = '\0';
+        drawText(BAR_X + 5 * GLYPH_W * LABEL_SIZE, TEMP_Y, LABEL_SIZE, COLOR_TEMP, text);
+    }
+}
+#endif
+
+void displayUpdate(float pressure, float temperature)
+{
     const uint32_t now = millis();
-    if ((uint32_t)(now - lastRenderMs) < DISPLAY_PERIOD_MS) {
+    if ((uint32_t)(now - lastRenderMs) < DISPLAY_PERIOD_MS)
+    {
         return;
     }
     lastRenderMs = now;
 
-    if (lcdMutex == nullptr || xSemaphoreTake(lcdMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+    if (lcdMutex == nullptr || xSemaphoreTake(lcdMutex, pdMS_TO_TICKS(50)) != pdTRUE)
+    {
         return;
     }
 
     renderStatus();
     renderValue(pressure);
-    renderRange(pressure, pressureMin, pressureMax);
+    renderBar(pressure);
+#ifdef OPTION_TEMPERATUR
+    renderTemperature(temperature);
+#else
+    (void)temperature;
+#endif
 
     xSemaphoreGive(lcdMutex);
 }

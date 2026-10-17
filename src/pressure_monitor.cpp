@@ -32,6 +32,10 @@
 #define PRESSURE_CHANNEL 1
 #endif
 
+#ifdef OPTION_TEMPERATUR
+#include "temperature.h"
+#endif
+
 #ifdef OPTION_MQTT
 #include "mqtt.h"
 #endif
@@ -62,7 +66,7 @@ uint16_t global_counter = 0;
 XCP_COMMENT(global_counter, "Global measurement variable, incremented in fastTask");
 
 float pressure = 0.0f;
-XCP_COMMENT(pressure, "Calibrated pressure, or generated sine wave when no analog converter is present, updated in slowTask");
+XCP_COMMENT(pressure, "Calibrated pressure, updated in slowTask");
 XCP_UNIT(pressure, "bar");
 
 #ifdef OPTION_ANALOG
@@ -71,15 +75,13 @@ XCP_COMMENT(pressure_sensor_voltage, "Raw pressure sensor voltage measured on an
 XCP_UNIT(pressure_sensor_voltage, "V");
 #endif
 
-// Extremes recorded at task rate, not at display or MQTT rate, so a short
-// pressure spike between two publishes is still captured.
-float pressure_min = NAN;
-XCP_COMMENT(pressure_min, "Lowest pressure recorded since the last reset");
-XCP_UNIT(pressure_min, "bar");
-
-float pressure_max = NAN;
-XCP_COMMENT(pressure_max, "Highest pressure recorded since the last reset");
-XCP_UNIT(pressure_max, "bar");
+#ifdef OPTION_TEMPERATUR
+// Copied from the temperature task in every slowTask cycle, so XCP can observe
+// it with the slowTask event. The sensor itself converts only once per second.
+float temperature = NAN;
+XCP_COMMENT(temperature, "DS18B20 temperature, NAN while no sensor answers");
+XCP_UNIT(temperature, "degC");
+#endif
 
 static uint32_t fastTaskOverruns = 0;
 static uint32_t slowTaskOverruns = 0;
@@ -105,7 +107,6 @@ struct parameters
     uint32_t fast_task_period_ms;    // Period of fastTask in milliseconds
     uint32_t slow_task_period_ms;    // Period of slowTask in milliseconds
     uint32_t mqtt_publish_period_ms; // Averaging window and MQTT publish period in milliseconds
-    uint32_t min_max_reset;          // Write any different value to clear pressure_min and pressure_max
     uint16_t counter_max;            // Wrap-around value for global_counter
     float sensor_voltage_point1;     // Sensor voltage at calibration point 1
     float pressure_point1;           // Pressure at calibration point 1
@@ -117,7 +118,6 @@ XCP_UNIT(parameters__fast_task_period_ms, "ms");
 XCP_UNIT(parameters__slow_task_period_ms, "ms");
 XCP_COMMENT(parameters__mqtt_publish_period_ms, "MQTT publish period, and the averaging window for pressure_filtered");
 XCP_UNIT(parameters__mqtt_publish_period_ms, "ms");
-XCP_COMMENT(parameters__min_max_reset, "Write any value different from the current one to restart the pressure min/max recording");
 XCP_COMMENT(parameters__sensor_voltage_point1, "Pressure sensor voltage at two-point calibration point 1");
 XCP_UNIT(parameters__sensor_voltage_point1, "V");
 XCP_COMMENT(parameters__pressure_point1, "Pressure at two-point calibration point 1");
@@ -134,7 +134,6 @@ const struct parameters parameters = {
     .fast_task_period_ms = 1,  // 1 ms = 1000 Hz
     .slow_task_period_ms = 10, // 10 ms = 100 Hz
     .mqtt_publish_period_ms = MQTT_PUBLISH_PERIOD_MS,
-    .min_max_reset = 0,
     .counter_max = 1000,
     .sensor_voltage_point1 = 0.58775f,
     .pressure_point1 = 0.0f,
@@ -287,12 +286,6 @@ static void slowTask(void *parameter)
     uint32_t fast_task_period_ms;
     (void)fast_task_period_ms;
 
-    // The calibration segment gives read-only access to the working page, so a
-    // self-clearing flag is not possible. Instead any change of min_max_reset
-    // restarts the recording, which CANape can trigger by writing a new value.
-    uint32_t min_max_reset = 0;
-    uint32_t last_min_max_reset = 0;
-
 #ifdef OPTION_MQTT
     // Averaging accumulator for the MQTT publish interval. The sum is a double:
     // a long calibrated interval can accumulate tens of thousands of samples,
@@ -323,7 +316,6 @@ static void slowTask(void *parameter)
 
             clamp_parameter(slow_task_period_ms, params->slow_task_period_ms, SLOWTASK_PERIOD_MIN_MS, SLOWTASK_PERIOD_MAX_MS);
             fast_task_period_ms = params->fast_task_period_ms;
-            min_max_reset = params->min_max_reset;
 #ifdef OPTION_MQTT
             clamp_parameter(mqtt_publish_period_ms, params->mqtt_publish_period_ms, MQTT_PERIOD_MIN_MS, MQTT_PERIOD_MAX_MS);
 #endif
@@ -357,27 +349,9 @@ static void slowTask(void *parameter)
 #endif
         } // unlock
 
-        if (min_max_reset != last_min_max_reset)
-        {
-            last_min_max_reset = min_max_reset;
-            pressure_min = NAN;
-            pressure_max = NAN;
-        }
-
-        // Record the extremes at task rate, so a spike between two publishes is
-        // not missed. isnan() comparisons are false, so the first valid sample
-        // seeds both bounds.
-        if (!isnan(pressure))
-        {
-            if (isnan(pressure_min) || pressure < pressure_min)
-            {
-                pressure_min = pressure;
-            }
-            if (isnan(pressure_max) || pressure > pressure_max)
-            {
-                pressure_max = pressure;
-            }
-        }
+#ifdef OPTION_TEMPERATUR
+        temperature = temperatureGet();
+#endif
 
         // Create and trigger the DAQ event 'slowTask'
 #ifdef OPTION_XCP
@@ -404,18 +378,19 @@ static void slowTask(void *parameter)
                 pressure_filtered = (float)(pressure_sum / (double)pressure_samples);
                 pressure_filtered_samples = pressure_samples;
 
-                // min and max are the extremes recorded since the last reset,
-                // the same values the display shows, not the extremes of this
-                // interval alone.
                 char meanText[16];
-                char minText[16];
-                char maxText[16];
                 formatJsonNumber(meanText, sizeof(meanText), pressure_filtered);
-                formatJsonNumber(minText, sizeof(minText), pressure_min);
-                formatJsonNumber(maxText, sizeof(maxText), pressure_max);
 
                 // Formats and queues only; the publisher task owns all network I/O
-                (void)mqttRequestPublish("{\"pressure\":%s,\"min\":%s,\"max\":%s}", meanText, minText, maxText);
+#ifdef OPTION_TEMPERATUR
+                // Latest conversion, not averaged: the sensor itself is slow
+                // and converts only once per second
+                char temperatureText[16];
+                formatJsonNumber(temperatureText, sizeof(temperatureText), temperature);
+                (void)mqttRequestPublish("{\"pressure\":%s,\"temperature\":%s}", meanText, temperatureText);
+#else
+                (void)mqttRequestPublish("{\"pressure\":%s}", meanText);
+#endif
             }
             pressure_sum = 0.0;
             pressure_samples = 0;
@@ -424,7 +399,11 @@ static void slowTask(void *parameter)
 
 #ifdef OPTION_DISPLAY
         // Called every cycle; the display module rate limits its own rendering
-        displayUpdate(pressure, pressure_min, pressure_max);
+#ifdef OPTION_TEMPERATUR
+        displayUpdate(pressure, temperature);
+#else
+        displayUpdate(pressure, NAN);
+#endif
 #endif
 
 #ifdef OPTION_IO
@@ -444,8 +423,6 @@ static void slowTask(void *parameter)
 
 bool pressureMonitorInit(void)
 {
-
-    printf("Pressure monitor\n");
 
     if (!createTask(fastTask, "fastTask", FASTTASK_STACKSIZE, FASTTASK_PRIORITY, &fastTaskHandle))
     {

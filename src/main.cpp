@@ -25,14 +25,19 @@
 #include "analog.h"
 #endif
 
+#ifdef OPTION_TEMPERATUR
+#include "temperature.h"
+#endif
+
 #ifdef OPTION_MQTT
 #include "mqtt.h"
 #endif
 
-void setup() {
+void setup()
+{
 
     Serial.begin(115200);
-    delay(500);
+    delay(2000); // Delay to make sure the serial monitor catches all messages
 
 #ifdef OPTION_DISPLAY
     displayInit();
@@ -43,12 +48,23 @@ void setup() {
 #endif
 
 #ifdef OPTION_ANALOG
-    analogInit();
+    if (!analogInit())
+    {
+        printf("Analog init failed\n");
+    }
+#endif
+
+#ifdef OPTION_TEMPERATUR
+    if (!temperatureInit())
+    {
+        printf("Temperature init failed\n");
+    }
 #endif
 
     // XCP and MQTT both need the network
-    if (!wifiConnect()) {
-        Serial.println("XCP server not started because WiFi is not connected");
+    if (!wifiConnect())
+    {
+        printf("XCP server not started because WiFi is not connected\n");
 #ifdef OPTION_DISPLAY
         displayError("WiFi failed");
 #endif
@@ -56,13 +72,15 @@ void setup() {
     }
 
 #ifdef OPTION_MQTT
-    if (!mqttInit()) {
-        Serial.println("MQTT init failed");
+    if (!mqttInit())
+    {
+        printf("MQTT init failed\n");
     }
 #endif
 
 #ifdef OPTION_XCP
-    if (!xcpInit()) {
+    if (!xcpInit())
+    {
         printf("XCP server startup failed\n");
 #ifdef OPTION_DISPLAY
         displayError("XCP init failed");
@@ -70,8 +88,9 @@ void setup() {
     }
 #endif
 
-    if (!pressureMonitorInit()) {
-        Serial.println("Pressure monitor init failed");
+    if (!pressureMonitorInit())
+    {
+        printf("Pressure monitor init failed\n");
 #ifdef OPTION_DISPLAY
         displayError("Init failed");
 #endif

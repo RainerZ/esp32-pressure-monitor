@@ -1,7 +1,7 @@
-# Home Assistant and MQTT broker on a Raspberry Pi — setup notes
+# Home Assistant, MQTT broker and Node-RED on a Raspberry Pi — setup notes
 
 How the Raspberry Pi 5 receives this node's MQTT data: Docker, a Mosquitto
-broker, and Home Assistant (HA) for evaluation. Written as a step-by-step
+broker, Home Assistant (HA) for evaluation, and Node-RED. Written as a step-by-step
 reference, so the setup can be repeated or repaired later.
 
 Set up and verified on 2026-10-08 with:
@@ -12,31 +12,66 @@ Set up and verified on 2026-10-08 with:
 | Docker Engine / Compose | 29.8.2 / v5.6.0, from Docker's own apt repository |
 | Home Assistant | 2026.10.0, Container installation (`ghcr.io/home-assistant/home-assistant:stable`) |
 | Mosquitto | 2.1.2 (`eclipse-mosquitto:2`) |
+| Node-RED | 5.0.8 (`nodered/node-red:5`), verified 2026-10-09 |
 
 Based on the official guide
 <https://www.home-assistant.io/installation/raspberrypi-other> (Container
-section), with the corrections listed in [section 11](#11-pitfalls-and-troubleshooting).
+section), with the corrections listed in [section 12](#12-pitfalls-and-troubleshooting).
 
 
 ## 1. Overview
 
 ```
-ESP32 pressure monitor ──MQTT──▶ Mosquitto broker ──MQTT──▶ Home Assistant
-192.168.8.127                    Pi, port 1883              Pi, port 8123
-publishes once per second        ~/mosquitto                ~/homeassistant
+                                                         ┌──▶ Home Assistant
+ESP32 pressure monitor ──MQTT──▶ Mosquitto broker ──MQTT─┤    Pi, port 8123, ~/homeassistant
+192.168.0.y                      Pi, port 1883           │
+publishes once per second        ~/mosquitto             └──▶ Node-RED
+                                                              Pi, port 1880, ~/node-red
 ```
 
 | Item | Value |
 |---|---|
-| Pi | `rainer@192.168.8.135` (hostname `pi6`, WLAN `wlan0`); Ethernet `eth0` is a different network, `192.168.0.206` |
-| ESP32 | `192.168.8.127`, WLAN `HUAWEI-B311-7F94` (same network as the Pi's `wlan0`) |
+| Pi | `rainer@192.168.0.x` |
+| ESP32 | `192.168.0.y` |
 | MQTT topic | `pressure_monitor/measurement` |
-| Payload | `{"pressure":2.31,"min":2.29,"max":2.35}` — bar, mean/min/max over the publish interval |
+| Payload | `{"pressure":2.31}` — bar, mean over the publish interval; with `OPTION_TEMPERATUR` also `"temperature":21.4` in °C |
 | HA web interface | <http://x.x.x.x:8123> |
+| Node-RED editor | <http://x.x.x.x:1880> |
 
-The broker and HA are **two independent Docker Compose projects**. The broker is
-the core of the sensor network and must keep running whether HA is used or not;
-HA is just one of its clients.
+The broker, HA and Node-RED are **three independent Docker Compose projects**.
+The broker is the core of the sensor network and must keep running whether HA
+or Node-RED are used or not; both are just clients of it.
+
+### Network of the Pi
+
+The Pi is wired (Ethernet `eth0`) to the router whose WLAN the ESP32 uses, gets
+its address by DHCP, and has its own WLAN switched off. Its address is fixed by
+a DHCP reservation in the router (MAC address from `ip link show eth0`), not on
+the Pi: the ESP32's `MQTT_BROKER_HOST` depends on it, and a fixed address set
+on the Pi breaks as soon as the Pi is plugged into another network.
+
+Network settings are NetworkManager profiles (`Wired connection 1`,
+`Wi-Fi connection 1`), changed with `nmcli`:
+
+```bash
+ip -4 -br addr                                   # addresses of all interfaces
+nmcli -f ipv4.method,ipv4.addresses con show "Wired connection 1"   # auto = DHCP, manual = fixed
+nmcli radio wifi                                 # enabled / disabled
+```
+
+Switch the cable to DHCP and the WLAN off. Do the WLAN last, from an SSH
+session over the cable (`echo $SSH_CONNECTION` shows the address in use), so
+the session you type in is never the one you cut:
+
+```bash
+sudo nmcli con mod "Wired connection 1" ipv4.method auto ipv4.addresses "" ipv4.gateway "" ipv4.dns ""
+sudo nmcli con up "Wired connection 1"
+sudo nmcli radio wifi off        # stays off after reboots; undo with: sudo nmcli radio wifi on
+```
+
+HA (`localhost`) and Node-RED (`host.docker.internal`) reach the broker through
+names for the Pi itself, so an address change only affects the ESP32 and the
+browser bookmarks.
 
 
 ## 2. Docker in four terms
@@ -169,7 +204,7 @@ root. Editing them needs `sudo`.
 
 ## 5. First start and onboarding
 
-Open <http://192.168.8.135:8123> → "Welcome home!" screen. The answers are
+Open <http://192.168.0.x:8123> → "Welcome home!" screen. The answers are
 stored in `config/.storage/` and can all be changed later under
 Einstellungen → System → Zuhause-Informationen.
 
@@ -225,7 +260,7 @@ log_dest stdout
 | Line | Meaning |
 |---|---|
 | `listener 1883` | Accept connections on the standard MQTT port. **Without it, Mosquitto 2 accepts connections only from itself.** |
-| `allow_anonymous true` | No login. Acceptable for a first test on the home network only — see [section 12](#12-open-items). |
+| `allow_anonymous true` | No login. Acceptable for a first test on the home network only: anyone on the WLAN can read and publish. |
 | `persistence …` | Retained messages and sessions survive restarts. |
 | `log_dest stdout` | Log goes to `docker compose logs`. |
 
@@ -279,8 +314,8 @@ The broker address is a build flag in [`../platformio.ini`](../platformio.ini):
     -DMQTT_BROKER_HOST=\"x.x.x.x\"
 ```
 
-It must be the Pi's address **on the network the ESP32 is in** (here the Pi's
-WLAN address). The value used before was `192.168.0.200`; this flag decides
+It must be the Pi's address **on the network the ESP32 is in**, i.e. its
+address at the router whose WLAN the ESP32 uses. The value used before was `192.168.0.200`; this flag decides
 which network the board works on.
 
 ```bash
@@ -288,7 +323,7 @@ pio run --target upload
 pio device monitor
 ```
 
-Expected: `MQTT connected to 192.168.8.135:1883, topic 'pressure_monitor/measurement'`,
+Expected: `MQTT connected to 192.168.0.x:1883, topic 'pressure_monitor/measurement'`,
 and one JSON line per second in the `mosquitto_sub` window.
 
 `MQTT connection to … failed, state=-2` means the TCP connection could not be
@@ -313,14 +348,14 @@ Test: the MQTT integration → ⋮ → Konfigurieren → listen to topic
 
 With `OPTION_MQTT_DISCOVERY` (on in `platformio.ini`) the node announces
 itself: after flashing, Einstellungen → Geräte & Dienste → MQTT shows the device
-**Pressure monitor** with *Pressure*, *Pressure min* and *Pressure max*, without
-any HA configuration. The firmware side is described in the README, section
+**Pressure monitor** with *Pressure* (and *Temperature* with
+`OPTION_TEMPERATUR`), without any HA configuration. The firmware side is described in the README, section
 "Home Assistant discovery".
 
 How it works:
 
 - **Discovery topic** `homeassistant/device/pressure_monitor_<chip id>/config`:
-  one JSON message describing the device and its three sensors (state topic,
+  one JSON message describing the device and its sensors (state topic,
   JSON field, unit, device class, unique ids). HA subscribes to
   `homeassistant/#` permanently and creates the entities when it arrives.
 - **Availability** on `pressure_monitor/status`: the node publishes `online`
@@ -380,22 +415,13 @@ mqtt:
       device:
         identifiers: ["pressure_monitor"]
         name: "Pressure monitor"
-    - name: "Pressure min"
-      unique_id: pressure_monitor_min
+    # Only with OPTION_TEMPERATUR
+    - name: "Temperature"
+      unique_id: pressure_monitor_temperature
       state_topic: "pressure_monitor/measurement"
-      value_template: "{{ value_json.min }}"
-      unit_of_measurement: "bar"
-      device_class: pressure
-      state_class: measurement
-      device:
-        identifiers: ["pressure_monitor"]
-        name: "Pressure monitor"
-    - name: "Pressure max"
-      unique_id: pressure_monitor_max
-      state_topic: "pressure_monitor/measurement"
-      value_template: "{{ value_json.max }}"
-      unit_of_measurement: "bar"
-      device_class: pressure
+      value_template: "{{ value_json.temperature }}"
+      unit_of_measurement: "°C"
+      device_class: temperature
       state_class: measurement
       device:
         identifiers: ["pressure_monitor"]
@@ -409,7 +435,7 @@ mqtt:
 | `unique_id` | Permanent ID; allows renaming and customizing in the web interface. |
 | `device_class: pressure` | Pressure icon and unit conversion (e.g. psi). |
 | `state_class: measurement` | Enables **long-term statistics**: 5-minute and hourly mean/min/max, kept indefinitely. Detailed history is purged after 10 days by default. |
-| `device` | Groups the three sensors as one device, "Pressure monitor". |
+| `device` | Groups the sensors as one device, "Pressure monitor". |
 
 ### 8.4 Check and restart after editing `configuration.yaml`
 
@@ -430,16 +456,263 @@ cd ~/homeassistant && docker compose restart
 `check_config` printing only `Testing configuration at /config` means no errors.
 
 Result: Einstellungen → Geräte & Dienste → MQTT → device **Pressure monitor**
-with the sensors *Pressure*, *Pressure min*, *Pressure max*.
+with the sensors *Pressure* and, with `OPTION_TEMPERATUR`, *Temperature*.
 
 
-## 9. Day-to-day operation
+## 9. Node-RED
 
-Commands apply to the project in the current folder (`~/homeassistant` or
-`~/mosquitto`), or to `-f <folder>/compose.yaml`. Plain `docker ps` lists all
+Node-RED is a flow-based programming tool in the browser: nodes for inputs
+(MQTT, HTTP, timers), processing (filters, functions) and outputs (MQTT,
+databases, e-mail, dashboards) are wired together and deployed with one click.
+Like HA it is just an MQTT client of the broker, and it is a third independent
+Compose project in `~/node-red`: it works with or without HA.
+
+### 9.1 Project folder
+
+```bash
+mkdir -p ~/node-red/data
+cd ~/node-red
+```
+
+`data/` holds the flows, settings, credentials and installed extra nodes. Create
+it **before** the first start: Node-RED runs as user `node-red` with uid 1000
+inside the container, which is the uid of `rainer` on the Pi, so the folder is
+writable for both, and editing needs no `sudo`. A folder created by Docker
+itself would belong to root, and Node-RED could not write to it.
+
+### 9.2 `~/node-red/compose.yaml`
+
+```yaml
+services:
+  node-red:
+    container_name: node-red
+    image: nodered/node-red:5
+    volumes:
+      - ./data:/data
+    ports:
+      - "1880:1880"
+    environment:
+      TZ: Europe/London
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+```
+
+| Line | Meaning |
+|---|---|
+| `image: nodered/node-red:5` | Official image, follows the latest 5.x release. |
+| `./data:/data` | Flows, `settings.js`, credentials and installed nodes. |
+| `ports: "1880:1880"` | Editor and HTTP endpoints on the Pi's port 1880. |
+| `TZ` | Time zone for timestamps in the log and in flows. |
+| `extra_hosts: host.docker.internal:host-gateway` | Gives the container a name for the Pi itself, see below. |
+
+Node-RED runs in Docker's isolated network, like the broker. Inside the
+container, `localhost` is the container itself, not the Pi, so unlike HA
+(which uses host networking) Node-RED cannot reach the broker as `localhost`.
+`host-gateway` makes the name `host.docker.internal` point to the Pi, where the
+broker's port 1883 is open. This also keeps working if the Pi's IP address
+changes.
+
+### 9.3 Start
+
+```bash
+docker compose up -d
+docker compose logs -f     # "Started flows"; Ctrl+C ends the display
+```
+
+The log line `Server now running at http://127.0.0.1:1880/` is the address
+inside the container. Open the editor at <http://x.x.x.x:1880>. It follows the
+browser's language; the German labels are given below.
+
+### 9.4 Password for the editor
+
+Without a password anyone on the WLAN can open the editor, change flows and run
+code in the container. Set one right after the first start.
+
+Create a password hash; the command asks for the password and prints the hash,
+a long string starting with `$2`:
+
+```bash
+docker exec -it node-red node-red admin hash-pw
+```
+
+Then edit `~/node-red/data/settings.js` (created at the first start):
+
+```bash
+nano data/settings.js
+```
+
+Find the commented `//adminAuth: {` block (around line 78), remove the `//` in
+front of its eight lines, and fill in a username and the hash:
+
+```js
+    adminAuth: {
+        type: "credentials",
+        users: [{
+            username: "admin",
+            password: "<hash from hash-pw>",
+            permissions: "*"
+        }]
+    },
+```
+
+```bash
+docker compose restart
+```
+
+The editor now asks for a login. A typo in `settings.js` stops Node-RED from
+starting; `docker compose logs` shows the line.
+
+### 9.5 First flow: the pressure monitor
+
+[`node-red/pressure_monitor_flow.json`](node-red/pressure_monitor_flow.json)
+is a ready-made flow. Import it in the editor: menu ☰ (top right) → **Import** →
+**Datei für Import auswählen** (select the file on the Mac) → **Import**, then
+click **Übernahme (deploy)** at the top right.
+
+```
+[Measurement] ──┬──▶ [Pressure]          debug: value in the sidebar and under the node
+  MQTT in, JSON └──▶ [Below 1.5 bar?] ──▶ [Low pressure]   switch: passes only pressure < 1.5
+[Availability] ────▶ [Online / offline]  debug: "online" / "offline" from the last will
+```
+
+- The broker configuration node *Mosquitto on the Pi* uses
+  `host.docker.internal:1883`. When it is connected, the MQTT nodes show a green
+  *connected* status.
+- *Measurement* parses the JSON, so the following nodes read
+  `msg.payload.pressure` (and `msg.payload.temperature` with `OPTION_TEMPERATUR`).
+- The debug sidebar (bug icon on the right) shows one pressure value per
+  second; the threshold and the status of each node are visible under the
+  nodes.
+
+To change a node, double-click it; every change takes effect only after
+**Übernahme (deploy)**.
+
+### 9.6 Extending
+
+Extra nodes are installed in the editor via menu ☰ → **Palette verwalten** →
+*Installation*. They go into `data/node_modules`, so they survive container
+updates. Commonly used with MQTT data:
+
+- `@flowfuse/node-red-dashboard` — web dashboard with gauges and charts
+- `node-red-contrib-influxdb` — store measurements in InfluxDB for long-term charts
+- `node-red-node-email`, Telegram nodes — notifications, e.g. on low pressure
+
+Node-RED can also control HA (`node-red-contrib-home-assistant-websocket`), but
+connected only through MQTT it stays independent of HA.
+
+### 9.7 Network access of extra nodes
+
+Node-RED runs in Docker's isolated network (section 9.2). Whether a node works
+there depends on who opens the connection, and how:
+
+| Kind of node | Examples | Isolated network |
+|---|---|---|
+| Connects **out** to a known address | MQTT, HTTP request, InfluxDB, e-mail, Telegram, cloud services, LAN devices by IP (Shelly HTTP, Modbus TCP, OPC UA, S7, Fritz!Box) | Works |
+| Accepts connections **in** on port 1880 | HTTP-in nodes, webhooks, dashboard | Works |
+| Accepts connections **in** on another port | TCP-in, UDP-in | Works after adding the port, e.g. `- "5000:5000/udp"` under `ports:`, then `docker compose up -d` |
+| **Searches** the network or sends to everyone | Discovery via mDNS/Bonjour or SSDP/UPnP (Chromecast, Sonos, Hue bridge), `node-red-contrib-homekit-bridged`, Wake-on-LAN, KNX IP routing (multicast), network scans and presence detection (ARP, nmap) | **Does not work**: broadcasts and multicasts stay inside Docker's network. Needs host networking. |
+
+Typical symptom of the last case: automatic discovery finds nothing, while the
+same device works when its IP address is entered by hand. Node documentation
+often says so ("requires host networking in Docker").
+
+Switching to host networking, like HA, changes two things in
+`~/node-red/compose.yaml`: add `network_mode: host` and remove `ports:`
+(every port is then on the Pi directly, nothing to forward).
+
+```yaml
+services:
+  node-red:
+    container_name: node-red
+    image: nodered/node-red:5
+    volumes:
+      - ./data:/data
+    network_mode: host
+    environment:
+      TZ: Europe/London
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+```
+
+```bash
+docker compose up -d     # recreates the container; flows, settings and nodes in data/ stay
+```
+
+Flows need no change: in host mode both `localhost:1883` and
+`host.docker.internal:1883` reach the broker (tested on the Pi), so the
+broker setting of section 9.5 works in both modes and switching back is the
+same edit in reverse.
+
+The price is isolation: in host mode every port a flow opens is open on the Pi
+directly, with no `ports:` list limiting it. Acceptable on a home network once
+the editor has a password (section 9.4). Recommendation: keep the isolated
+network and switch only when a specific node needs it.
+
+`macvlan`, a Docker network that gives the container its own LAN address, is a
+middle way, but more complex, and by default the Pi itself cannot talk to such a
+container. Not worth it here.
+
+Hardware is a separate question from the network mode: USB sticks (Zigbee,
+RS485 for Modbus RTU), Bluetooth and the Pi's GPIO pins are passed into the
+container with a `devices:` entry in `compose.yaml` (Bluetooth additionally
+with the `/run/dbus` mount, as for HA), in either network mode.
+
+### 9.8 Dashboard with a pressure chart
+
+A web page with the sensor status, the current pressure and a chart of the last
+hour, built with FlowFuse Dashboard 2.0 (`@flowfuse/node-red-dashboard`,
+verified with 1.33.0). It needs no extra container: the dashboard is served by
+Node-RED itself on port 1880.
+
+1. Install the package: menu ☰ → **Palette verwalten** → *Installation* →
+   search `@flowfuse/node-red-dashboard` → **Installieren**. It takes under a
+   minute and needs no restart.
+2. Import [`node-red/pressure_dashboard_flow.json`](node-red/pressure_dashboard_flow.json)
+   like the first flow (section 9.5), then **Übernahme (deploy)**. It creates a
+   tab *Pressure dashboard* and uses the broker node *Mosquitto on the Pi* of
+   the first flow, so import that one first.
+3. Open <http://x.x.x.x:1880/dashboard/pressure>.
+
+```
+[Measurement] ─▶ [Has a value?] ─┬─▶ [Pressure for the chart] ─▶ [Pressure chart]    line chart, last hour
+                                 └─▶ [Format x.xxx bar] ────────▶ [Current pressure]  text
+[Availability] ─────────────────────────────────────────────────▶ [Sensor status]     text: online / offline
+```
+
+- *Has a value?* drops messages whose `pressure` is `null` (no valid sample
+  yet), which would break the chart line.
+- *Pressure for the chart* sets `msg.payload` to the number and `msg.topic` to
+  the series name; the chart takes the time from the arrival of the message.
+- The dashboard configuration nodes (*Pressure monitor* app with path
+  `/dashboard`, theme, page `/pressure`, group) are in the editor's
+  configuration sidebar (gear icon), not on the tab.
+
+Notes:
+
+- The chart keeps its points in Node-RED's memory: 1 hour, about 3600 points
+  at the 1 s publish period. A restart of the flows or the container starts it
+  empty. To change the window, double-click *Pressure chart* and change the
+  value next to the age limit (*1 hour*). Long-term history belongs in a
+  database (e.g. InfluxDB, section 9.6) or in HA's statistics.
+- Right after a deploy that only **adds** nodes, *Sensor* may stay empty:
+  Node-RED subscribes to each topic only once per broker connection, and the
+  first flow already subscribes to `pressure_monitor/status`, so the broker
+  does not send the retained `online` again. The value appears at the next
+  status change or flow restart; force it with the arrow next to
+  **Übernahme (deploy)** → **Flows neustarten**, or `docker compose restart`.
+- The dashboard has no login of its own; anyone who can reach port 1880 can view
+  it.
+
+
+## 10. Day-to-day operation
+
+Commands apply to the project in the current folder (`~/homeassistant`,
+`~/mosquitto` or `~/node-red`), or to `-f <folder>/compose.yaml`. Plain `docker ps` lists all
 containers on the Pi.
 
-### 9.1 Status and logs
+### 10.1 Status and logs
 
 ```bash
 docker compose ps
@@ -450,7 +723,7 @@ docker compose logs -f
 HA also shows its log under Einstellungen → System → Protokolle, which is
 easier to read.
 
-### 9.2 Start, stop, apply changes
+### 10.2 Start, stop, apply changes
 
 | Command | Effect | Container afterwards |
 |---|---|---|
@@ -467,7 +740,7 @@ creates a new one; the data folders are untouched.
 Changes to HA's `configuration.yaml` need only an HA restart (web interface or
 `docker compose restart`), not `up -d`.
 
-### 9.3 Update
+### 10.3 Update
 
 ```bash
 docker compose pull       # new image; the old container keeps running
@@ -484,27 +757,30 @@ To control the version, replace `:stable` with a fixed tag, e.g.
 way, but a database migrated by a newer version may not work with an older
 one — back up first.
 
-### 9.4 Backup and restore
+### 10.4 Backup and restore
 
-Both projects are plain folders. Stop the containers so the HA database is not
-written during the copy:
+All three projects are plain folders. Stop the containers so the HA database
+and the Node-RED files are not written during the copy:
 
 ```bash
-docker compose -f ~/homeassistant/compose.yaml stop
-docker compose -f ~/mosquitto/compose.yaml stop
-sudo tar czf ~/pi-backup-$(date +%F).tar.gz -C ~ homeassistant mosquitto
-docker compose -f ~/mosquitto/compose.yaml start
-docker compose -f ~/homeassistant/compose.yaml start
+for p in homeassistant node-red mosquitto; do docker compose -f ~/$p/compose.yaml stop; done
+sudo tar czf ~/pi-backup-$(date +%F).tar.gz -C ~ homeassistant mosquitto node-red
+for p in mosquitto node-red homeassistant; do docker compose -f ~/$p/compose.yaml start; done
 ```
+
+The loop runs the same command for each project; the broker stops last and
+starts first, so its clients find it running. Node-RED encrypts stored
+passwords with a key in `data/.config.runtime.json`; back up the whole folder,
+not only the flows.
 
 `sudo` is needed for the root-owned files. Copy the archive off the Pi (run on
 the Mac):
 
 ```bash
-scp rainer@192.168.8.135:pi-backup-*.tar.gz ~/Downloads/
+scp rainer@192.168.0.x:pi-backup-*.tar.gz ~/Downloads/
 ```
 
-Restore (example: HA only; the broker works the same way):
+Restore (example: HA only; the other projects work the same way):
 
 ```bash
 docker compose -f ~/homeassistant/compose.yaml down
@@ -517,7 +793,7 @@ HA's built-in backups (Einstellungen → System → Backups) also work on a
 Container installation. They are stored in `config/backups/`, i.e. on the same
 SD card, so copy them elsewhere or configure a network share as the location.
 
-### 9.5 Shell inside a container
+### 10.5 Shell inside a container
 
 ```bash
 docker compose exec homeassistant bash     # in ~/homeassistant; leave with exit
@@ -526,7 +802,7 @@ docker compose exec homeassistant bash     # in ~/homeassistant; leave with exit
 Everything changed inside a container outside its bind mounts is lost when the
 container is recreated. Look around, do not install anything there.
 
-### 9.6 Disk usage
+### 10.6 Disk usage
 
 ```bash
 docker system df       # space used by images and containers
@@ -536,7 +812,7 @@ docker system prune    # delete stopped containers, unused networks, dangling im
 Bind-mounted data folders are never touched by Docker's cleanup commands.
 
 
-## 10. Removing everything
+## 11. Removing everything
 
 These steps cannot be undone; back up first if the data might be needed later.
 
@@ -556,6 +832,14 @@ docker rmi eclipse-mosquitto:2
 sudo rm -rf ~/mosquitto
 ```
 
+Remove only Node-RED:
+
+```bash
+docker compose -f ~/node-red/compose.yaml down
+docker rmi nodered/node-red:5
+rm -rf ~/node-red
+```
+
 Remove Docker itself (this also stops and deletes **all** containers and
 images, including the broker):
 
@@ -570,7 +854,7 @@ sudo gpasswd -d rainer docker
 containers) behind; they are deleted by hand.
 
 
-## 11. Pitfalls and troubleshooting
+## 12. Pitfalls and troubleshooting
 
 | Symptom / topic | Explanation |
 |---|---|
@@ -586,6 +870,12 @@ containers) behind; they are deleted by hand.
 | Discovered entities are named `sensor.…_2` | The YAML sensors of section 8.3 still existed when discovery arrived. Delete the old entities, then change the entity ids in the new entities' settings, or delete the new device and restart HA so the node re-announces with free ids. |
 | Device stays in HA after a board was retired | Its discovery message is retained (firmware without `OPTION_MQTT_SUBSCRIBE`). Delete it with an empty retained message, see section 8.2. |
 | `MQTT discovery publish failed` on the serial console | The packet exceeds PubSubClient's buffer (`MQTT_DISCOVERY_BUFFER_SIZE`, 1024), e.g. with long names or topics. |
+| Node-RED restarts over and over, log shows `EACCES: permission denied` | `~/node-red/data` belongs to root, because Docker created it. `sudo chown -R 1000:1000 ~/node-red/data`, then `docker compose up -d`. |
+| Node-RED MQTT nodes stay at *connecting* | Broker set to `localhost`, which in the isolated network is the Node-RED container itself. Use `host.docker.internal` (needs the `extra_hosts` line in `compose.yaml`). |
+| A Node-RED node finds no devices by itself, but works with an IP address entered by hand | Discovery uses broadcasts or multicasts, which do not leave Docker's isolated network. Switch Node-RED to host networking, section 9.7. |
+| Node-RED does not start after editing `settings.js` | Syntax error, e.g. a missing comma after the `adminAuth` block; `docker compose logs` names the line. |
+| Pi unreachable from Mac and ESP32, but `ip -4 -br addr` shows an address of another network on `eth0` | A fixed address for another network is configured (`ipv4.method manual`). Switch to DHCP, see "Network of the Pi" in section 1. |
+| Pi works only while its WLAN is on | Everything uses the WLAN because the cable has no usable address; often the WLAN was set up in Raspberry Pi Imager. Fix the cable first, then switch the WLAN off. |
 | Broker reachable from HA but logged as `172.18.0.1` | Normal: HA connects via `localhost`, which arrives through the gateway of the broker project's Docker network. |
 
 
@@ -602,3 +892,4 @@ containers) behind; they are deleted by hand.
 | Watch MQTT traffic | `docker exec -it mosquitto mosquitto_sub -t 'pressure_monitor/#' -v` |
 | Check HA configuration | `docker exec homeassistant python -m homeassistant --script check_config --config /config` |
 | Shell in HA container | `docker compose exec homeassistant bash` |
+| Node-RED password hash | `docker exec -it node-red node-red admin hash-pw` |

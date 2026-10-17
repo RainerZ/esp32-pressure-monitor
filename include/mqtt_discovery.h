@@ -1,7 +1,8 @@
 // Home Assistant MQTT discovery
 //
-// Announces this node as one device with three sensors (pressure, min, max),
-// so Home Assistant creates them without any configuration on its side. Also
+// Announces this node as one device with a pressure sensor, plus temperature
+// with OPTION_TEMPERATUR, so Home Assistant creates them without any
+// configuration on its side. Also
 // maintains an availability topic: "online" (retained) after every connect,
 // and "offline" as the last will the broker publishes when the connection is
 // lost.
@@ -38,8 +39,8 @@
 #define MQTT_AVAILABILITY_OFFLINE "offline"
 
 // PubSubClient's default 256 byte packet buffer is too small for the config
-// message (about 850 bytes). The buffer holds one whole packet: header, topic
-// and payload.
+// message (about 450 bytes, 700 with OPTION_TEMPERATUR). The buffer holds one
+// whole packet: header, topic and payload.
 #define MQTT_DISCOVERY_BUFFER_SIZE 1024
 
 // Before the first connect: build the config message for this chip and enlarge

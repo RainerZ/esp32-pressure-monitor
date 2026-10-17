@@ -16,15 +16,18 @@
 
 #define WIFI_CONNECT_TIMEOUT_MS 30000
 
-struct WiFiTarget {
+struct WiFiTarget
+{
     bool found;
     int32_t rssi;
     int32_t channel;
     uint8_t bssid[6];
 };
 
-static const char *wifiStatusName(wl_status_t status) {
-    switch (status) {
+static const char *wifiStatusName(wl_status_t status)
+{
+    switch (status)
+    {
     case WL_IDLE_STATUS:
         return "WL_IDLE_STATUS";
     case WL_NO_SSID_AVAIL:
@@ -44,8 +47,10 @@ static const char *wifiStatusName(wl_status_t status) {
     }
 }
 
-static const char *wifiAuthModeName(wifi_auth_mode_t authMode) {
-    switch (authMode) {
+static const char *wifiAuthModeName(wifi_auth_mode_t authMode)
+{
+    switch (authMode)
+    {
     case WIFI_AUTH_OPEN:
         return "OPEN";
     case WIFI_AUTH_WEP:
@@ -67,36 +72,43 @@ static const char *wifiAuthModeName(wifi_auth_mode_t authMode) {
     }
 }
 
-static void printBssid(const uint8_t *bssid) { Serial.printf("%02X:%02X:%02X:%02X:%02X:%02X", bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]); }
+static void printBssid(const uint8_t *bssid) { printf("%02X:%02X:%02X:%02X:%02X:%02X", bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]); }
 
-static void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
-    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+static void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info)
+{
+    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED)
+    {
         const uint8_t reason = info.wifi_sta_disconnected.reason;
-        Serial.printf("WiFi disconnected, reason=%u (%s)\n", reason, WiFi.disconnectReasonName(static_cast<wifi_err_reason_t>(reason)));
+        printf("WiFi disconnected, reason=%u (%s)\n", reason, WiFi.disconnectReasonName(static_cast<wifi_err_reason_t>(reason)));
     }
 }
 
-static WiFiTarget scanForConfiguredSsid(void) {
+static WiFiTarget scanForConfiguredSsid(void)
+{
     WiFiTarget target = {};
     target.rssi = -1000;
     target.channel = 0;
 
-    Serial.printf("Scanning WLANs for '%s'...\n", WIFI_SSID);
+    printf("Scanning WLANs for '%s'...\n", WIFI_SSID);
     const int networkCount = WiFi.scanNetworks();
-    if (networkCount < 0) {
-        Serial.printf("WiFi scan failed: %d\n", networkCount);
+    if (networkCount < 0)
+    {
+        printf("WiFi scan failed: %d\n", networkCount);
         return target;
     }
 
-    for (int i = 0; i < networkCount; i++) {
-        if (WiFi.SSID(i) == WIFI_SSID) {
+    for (int i = 0; i < networkCount; i++)
+    {
+        if (WiFi.SSID(i) == WIFI_SSID)
+        {
             const int32_t rssi = WiFi.RSSI(i);
             const wifi_auth_mode_t authMode = static_cast<wifi_auth_mode_t>(WiFi.encryptionType(i));
-            Serial.printf("Found '%s': RSSI=%d dBm, channel=%d, encryption=%d (%s), BSSID=", WiFi.SSID(i).c_str(), rssi, WiFi.channel(i), authMode, wifiAuthModeName(authMode));
+            printf("Found '%s': RSSI=%d dBm, channel=%d, encryption=%d (%s), BSSID=", WiFi.SSID(i).c_str(), rssi, WiFi.channel(i), authMode, wifiAuthModeName(authMode));
             printBssid(WiFi.BSSID(i));
-            Serial.println();
+            printf("\n");
 
-            if (!target.found || rssi > target.rssi) {
+            if (!target.found || rssi > target.rssi)
+            {
                 target.found = true;
                 target.rssi = rssi;
                 target.channel = WiFi.channel(i);
@@ -105,17 +117,21 @@ static WiFiTarget scanForConfiguredSsid(void) {
         }
     }
 
-    if (!target.found) {
-        Serial.printf("SSID '%s' was not found. Check that it is a 2.4 GHz WLAN and in range.\n", WIFI_SSID);
-    } else {
-        Serial.printf("Using strongest AP: RSSI=%d dBm, channel=%d, BSSID=", target.rssi, target.channel);
+    if (!target.found)
+    {
+        printf("SSID '%s' was not found. Check that it is a 2.4 GHz WLAN and in range.\n", WIFI_SSID);
+    }
+    else
+    {
+        printf("Using strongest AP: RSSI=%d dBm, channel=%d, BSSID=", target.rssi, target.channel);
         printBssid(target.bssid);
-        Serial.println();
+        printf("\n");
     }
     return target;
 }
 
-bool wifiConnect(void) {
+bool wifiConnect(void)
+{
     WiFi.onEvent(onWiFiEvent);
     WiFi.persistent(false);
     WiFi.mode(WIFI_STA);
@@ -125,26 +141,31 @@ bool wifiConnect(void) {
 
     const WiFiTarget target = scanForConfiguredSsid();
 
-    if (target.found) {
+    if (target.found)
+    {
         WiFi.begin(WIFI_SSID, WIFI_PASSWORD, target.channel, target.bssid);
-    } else {
+    }
+    else
+    {
         WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     }
 
-    Serial.printf("Connecting to WLAN '%s'", WIFI_SSID);
+    printf("Connecting to WLAN '%s'", WIFI_SSID);
     const uint32_t startMs = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - startMs < WIFI_CONNECT_TIMEOUT_MS) {
-        Serial.print(".");
+    while (WiFi.status() != WL_CONNECTED && millis() - startMs < WIFI_CONNECT_TIMEOUT_MS)
+    {
+        printf(".");
         vTaskDelay(pdMS_TO_TICKS(500));
     }
-    Serial.println();
+    printf("\n");
 
-    if (WiFi.status() != WL_CONNECTED) {
+    if (WiFi.status() != WL_CONNECTED)
+    {
         const wl_status_t status = WiFi.status();
-        Serial.printf("WiFi connection failed, status=%d (%s)\n", status, wifiStatusName(status));
+        printf("WiFi connection failed, status=%d (%s)\n", status, wifiStatusName(status));
         return false;
     }
 
-    Serial.printf("WiFi connected, IP address %s\n", WiFi.localIP().toString().c_str());
+    printf("WiFi connected, IP address %s\n", WiFi.localIP().toString().c_str());
     return true;
 }

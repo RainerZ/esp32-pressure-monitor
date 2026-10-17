@@ -8,7 +8,7 @@
 #ifdef OPTION_ANALOG
 
 // Probe the ADS1115 on I2C. Safe to call when no converter is connected.
-void analogInit(void);
+bool analogInit(void);
 
 // True when the converter answered during analogInit().
 bool analogIsPresent(void);

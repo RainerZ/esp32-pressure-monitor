@@ -16,7 +16,7 @@ MQTT can record long term pressure changes in your home automation system.
 Longer term, slow sampling rate pressure monitoring is usefull to check that pressure regulators, volume expansion tanks and overpressure valves are functional.  
 
 
-![Demo Board](ESP32.png)
+![Demo Board](ESP32.jpg)
 
 Derived from the `freertos_esp32_demo` example of [XCPlite](https://github.com/RainerZ/XCPlite).
 
@@ -25,6 +25,8 @@ Derived from the `freertos_esp32_demo` example of [XCPlite](https://github.com/R
 
 - An ESP32-S3 board compatible with `lilygo-t-display-s3`, or an adapted `platformio.ini`.
 - An ADS1115 4 channel I2C ADC at its default address `0x48`.
+- Optional, with `OPTION_TEMPERATUR`: a DS18B20 1-Wire temperature sensor and a
+  4.7 kΩ resistor.
 - A 2.4 GHz WLAN. The ESP32 does not connect to 5 GHz-only networks.
 - The board and the PC running CANape or `xcpclient` must be on the same network.
 
@@ -43,6 +45,33 @@ The pressure sensor is read on **AIN0**. The converter runs at gain 1 (a
 task period. Never drive an ADS1115 input below GND or above its supply voltage,
 whatever the configured range.
 
+DS18B20 wiring for the LilyGo T-Display-S3:
+
+| DS18B20 (TO-92 / cable) | LilyGo T-Display-S3 |
+|-------------------------|---------------------|
+| VDD (red)               | 3.3 V               |
+| GND (black)             | GND                 |
+| DQ (yellow)             | GPIO21              |
+| 4.7 kΩ resistor         | between DQ and 3.3 V |
+
+```
+   3.3 V ────────┬──────────────── VDD  (red)
+                 │
+               4.7 kΩ
+                 │
+   GPIO21 ───────┴──────────────── DQ   (yellow)
+
+   GND ─────────────────────────── GND  (black)
+```
+
+On the bare TO-92 package, flat side facing you and legs down, the pins are
+GND, DQ, VDD from left to right. Power the sensor from 3.3 V, not 5 V: DQ
+is pulled up to VDD and the ESP32 inputs are not 5 V tolerant. Parasite power
+(VDD tied to GND) is not supported by this firmware. For cables longer than a
+few meters, use twisted pair for DQ and GND and lower the pull-up to 2.2 kΩ.
+Another pin can be chosen with `-DTEMPERATURE_PIN=<gpio>`; avoid the strapping
+pins 0, 3, 45 and 46 and the pins of the LCD.
+
 
 ## Quick start
 
@@ -55,25 +84,26 @@ pio device monitor                 # note the IP address the board reports and f
 ```
 
 
-Start a measurement with the XCPlite xcpclient tool - just the pressure variable and print to a csv file.  
+Start a measurement with the XCPlite xcpclient tool - just the pressure variable, write values to a csv file.  
 xcpclient works with ELF or A2L files.  
 
 
 ```bash
-xcpclient --udp --dest-addr 192.168.8.127  --elf .pio/build/lilygo-t-display-s3/firmware.elf --elf-unit-filter pressure_monitor --default-event=0 --mea '^pressure$' --csv pressure_monitor.csv
+xcpclient --udp --dest-addr 192.168.0.ESP  --elf .pio/build/lilygo-t-display-s3/firmware.elf --elf-unit-filter pressure_monitor --default-event slowTask --mea '^pressure$' --csv pressure_monitor.csv
 ```
 
 
 Generate the A2L file from the firmware ELF for CANape or other XCP/A2L compliant tools:
+(embedding AML needs xcpclient >)
 
 ```bash
-xcpclient --offline --udp --dest-addr 192.168.0.154 --elf .pio/build/lilygo-t-display-s3/firmware.elf --a2l CANape/pressure_monitor.a2l --elf-unit-filter pressure_monitor --default-event=0
+xcpclient --offline --udp --dest-addr 192.168.0.ESP --elf .pio/build/lilygo-t-display-s3/firmware.elf --a2l CANape/pressure_monitor.a2l --embed-aml --elf-unit-filter pressure_monitor --default-event=slowTask
 ```
 
-Start a test measurement with xcpclient and the A2L file and print to terminal
+Start a test measurement with xcpclient and the generated A2L file and print pressure values to terminal
 
 ```bash
-xcpclient --udp --dest-addr 192.168.8.127 --a2l CANape/pressure_monitor.a2l --default-event=0  --mea pressure
+xcpclient --udp --dest-addr 192.168.0.ESP --a2l CANape/pressure_monitor.a2l --default-event=0  --mea '^pressure$'
 
 ```
 
@@ -107,8 +137,8 @@ Measurements, all observable over XCP:
 | `pressure` | bar | Calibrated pressure, updated in `slowTask` at task rate |
 | `pressure_filtered` | bar | Mean pressure over the last publish interval — the value sent to MQTT |
 | `pressure_filtered_samples` | | Number of samples averaged into `pressure_filtered` |
-| `pressure_min` / `pressure_max` | bar | Extremes recorded at task rate since the last reset |
 | `pressure_sensor_voltage` | V | Raw sensor voltage on AIN0 |
+| `temperature` | degC | DS18B20 temperature, `NaN` while no sensor answers (`OPTION_TEMPERATUR`) |
 | `global_counter` | | Free running counter, incremented in `fastTask` |
 | `fastTaskOverruns`, `slowTaskOverruns` | | Deadline misses, non-zero when a period is set too aggressively |
 
@@ -119,7 +149,6 @@ Calibration parameters in the `parameters` segment, writable live over XCP:
 | `fast_task_period_ms` | ms | 1 |
 | `slow_task_period_ms` | ms | 2 |
 | `mqtt_publish_period_ms` | ms | `MQTT_PUBLISH_PERIOD_MS`, default 1000 (clamped to 100 … 3600000) |
-| `min_max_reset` | | 0 — write any *different* value to restart min/max recording |
 | `sensor_voltage_point1` / `pressure_point1` | V / bar | 0.0 / 0.0 |
 | `sensor_voltage_point2` / `pressure_point2` | V / bar | 1.0 / 1.0 |
 
@@ -141,7 +170,8 @@ Everything is set through `build_flags` in [platformio.ini](platformio.ini).
 |---|---|
 | `OPTION_DISPLAY` | Pressure page on the T-Display-S3 LCD (needs LovyanGFX) |
 | `OPTION_IO` | Scope trigger pins |
-| `OPTION_ANALOG` | ADS1115 input; without it the sine generator is always used |
+| `OPTION_ANALOG` | ADS1115 analog input |
+| `OPTION_TEMPERATUR` | DS18B20 single wire temperature sensor |
 | `OPTION_XCP` | Enable XCP |
 | `OPTION_MQTT` | MQTT publisher task |
 | `OPTION_MQTT_DISCOVERY` | Home Assistant MQTT discovery and availability topic (needs `OPTION_MQTT`) |
@@ -167,20 +197,21 @@ build_flags =
 The display shows the measurement:
 
 ```
- 192.168.0.154
+ 192.168.0.ESP
 
    1.10 bar
 
  [==========|              ]
- min  1.097          max  1.101
+ 0                          6
+ Temp  21.4 °C
 ```
 
 - Current pressure in large digits, with the unit alongside.
-- The bar places the current value inside the recorded range, so you can see at
-  a glance where in its span the pressure is sitting.
-- `min` / `max` are recorded at **task rate**, not display rate, so a short spike
-  between two refreshes is still captured. Restart the recording by writing a
-  new value to the `min_max_reset` calibration parameter.
+- The bar places the current value on a fixed scale from 0 to 6 bar, clamped at
+  both ends. Change the scale with `-DDISPLAY_BAR_MIN=<bar>` and
+  `-DDISPLAY_BAR_MAX=<bar>`.
+- With `OPTION_TEMPERATUR`, the bottom line shows the DS18B20 temperature with
+  one decimal, or `---` while no sensor answers.
 - The top line shows the IP address, or the XCP connection state while a tool is
   attached, or `NO SENSOR - sine sim` in red when no ADS1115 was found — so a
   simulated sine wave is never mistaken for a real reading.
@@ -220,12 +251,18 @@ until the next reset — this build has no persistence, so a calibrated value is
 not retained across a power cycle. A `static_assert` rejects a build flag outside
 the clamp range, so the startup value can never silently disagree with the A2L.
 
-`min` and `max` are the extremes recorded since the last reset — the same values
-the display shows — not the extremes of that one interval. They are captured at
-task rate, so a spike shorter than the publish period still reaches the broker.
-Restart the recording by writing a new value to the `min_max_reset` calibration
-parameter. A value that is not yet available is published as JSON `null` rather
-than a bare `nan`, which strict parsers reject.
+With `OPTION_TEMPERATUR` the payload also carries `temperature` in °C. It is
+the latest DS18B20 conversion, not a mean: a 12 bit conversion takes 750 ms, so
+the sensor delivers one value per second anyway. A separate low priority task
+owns the 1-Wire bus and the measurement tasks only copy its last result, so the
+slow conversion never stalls `slowTask`. Bit-banged 1-Wire disables interrupts
+for about 70 µs per bit, which shows up as small task jitter once per second
+while the result is read. The task looks for a sensor again every 5 s, so one
+that is plugged in later or reconnected is picked up; until then `temperature`
+is `null`.
+
+A value that is not available is published as JSON `null` rather than a bare
+`nan`, which strict parsers reject.
 
 The slow task never performs network operations: it formats a JSON snapshot into
 a one-element mailbox, and a separate low priority task owns the broker
@@ -234,9 +271,10 @@ value. Nothing is published while every sample in an interval is `NaN`.
 
 Defaults:
 
-- Broker `x.x.x.x:1883` (set in `platformio.ini`)
+- Broker `x.ESP.ESP.ESP:1883` (set in `platformio.ini`)
 - Topic `pressure_monitor/measurement`
-- Payload `{"pressure":1.096658,"min":1.096375,"max":1.097125}`
+- Payload `{"pressure":1.096658}`, with `OPTION_TEMPERATUR`
+  `{"pressure":1.096658,"temperature":21.375000}`
 - Publish period 1000 ms, adjustable over XCP
 - With `OPTION_MQTT_DISCOVERY`: availability topic `pressure_monitor/status`
   (`online` / `offline`, retained)
@@ -245,7 +283,7 @@ Override with build flags:
 
 ```ini
 build_flags =
-    -DMQTT_BROKER_HOST=\"192.168.0.10\"
+    -DMQTT_BROKER_HOST=\"192.168.0.ESP\"
     -DMQTT_BROKER_PORT=1883
     -DMQTT_TOPIC=\"pressure_monitor/measurement\"
     -DMQTT_PAYLOAD_MAX_LENGTH=160
@@ -258,8 +296,8 @@ For a broker requiring authentication, define both `MQTT_USERNAME` and
 #### Home Assistant discovery
 
 With `OPTION_MQTT_DISCOVERY` the node announces itself to Home Assistant as one
-device, *Pressure monitor*, with the sensors *Pressure*, *Pressure min* and
-*Pressure max*, so nothing has to be configured on the HA side.
+device, *Pressure monitor*, with the sensor *Pressure*, plus *Temperature* with
+`OPTION_TEMPERATUR`, so nothing has to be configured on the HA side.
 [src/mqtt_discovery.cpp](src/mqtt_discovery.cpp) holds all of it; `mqtt.cpp`
 only calls it at init, after each connect and for received messages.
 
@@ -271,8 +309,8 @@ only calls it at init, after each connect and for received messages.
 - Unique ids and the discovery topic are derived from the same chip id as the
   MQTT client id, so several boards never collide in HA's device list. They
   still need their own `MQTT_TOPIC` and `MQTT_AVAILABILITY_TOPIC`.
-- The discovery message is about 850 bytes, so PubSubClient's packet buffer
-  is enlarged from 256 to 1024 bytes.
+- The discovery message is about 450 bytes, 700 with the temperature sensor,
+  so PubSubClient's packet buffer is enlarged from 256 to 1024 bytes.
 - With `OPTION_MQTT_SUBSCRIBE` the node subscribes to `homeassistant/status`
   and re-announces whenever HA publishes `online` there (its birth message).
   The config is then not retained, so a retired node leaves nothing behind on
@@ -308,6 +346,7 @@ src/
   main.cpp                setup() / loop(), startup sequence
   pressure_monitor.cpp    XCP server, tasks, measurements, calibration
   analog.cpp              ADS1115
+  temperature.cpp         DS18B20 temperature task
   display.cpp             T-Display-S3 status page
   wifi_sta.cpp            WiFi scan and connect
   mqtt.cpp                MQTT publisher task
@@ -316,7 +355,8 @@ src/
   wlan.h.example          Template for the gitignored src/wlan.h
 xcplite/                  Vendored XCPlite subset (22 files), see below
 tools/update_xcplite.sh   Refreshes xcplite/ from an XCPlite repository
-docs/HOME_ASSISTANT.md    Mosquitto broker and Home Assistant on a Raspberry Pi
+docs/HOME_ASSISTANT.md    Mosquitto broker, Home Assistant and Node-RED on a Raspberry Pi
+docs/node-red/            Example Node-RED flows: MQTT data and dashboard
 CANape/                   CANape project and generated A2L
 ```
 
@@ -366,7 +406,7 @@ so the A2L is produced from the firmware ELF on the host with `xcpclient` from
 the XCPlite repository:
 
 ```bash
-xcpclient --offline --udp --dest-addr 192.168.8.135 --elf .pio/build/lilygo-t-display-s3/firmware.elf --a2l CANape/pressure_monitor.a2l --elf-unit-filter pressure_monitor
+xcpclient --offline --udp --dest-addr 192.168.0.ESP --elf .pio/build/lilygo-t-display-s3/firmware.elf --a2l CANape/pressure_monitor.a2l --elf-unit-filter pressure_monitor
 ```
 
 `--elf-unit-filter pressure_monitor` restricts the A2L to this application
@@ -407,7 +447,7 @@ ping <esp32-ip>
 The XCP server listens on UDP port 5555. A basic connection test:
 
 ```bash
-xcpclient --udp --dest-addr 192.168.8.135
+xcpclient --udp --dest-addr 192.168.0.ESP
 ```
 
 
