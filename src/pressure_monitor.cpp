@@ -137,7 +137,7 @@ const struct parameters parameters = {
     .counter_max = 1000,
     .sensor_voltage_point1 = 0.58775f,
     .pressure_point1 = 0.0f,
-    .sensor_voltage_point2 = 0.020 * 150 + 0.58775f,
+    .sensor_voltage_point2 = 0.2412 * 10 + 0.58775f,
     .pressure_point2 = 10.0f,
 };
 

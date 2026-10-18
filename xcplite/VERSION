@@ -1,6 +1,6 @@
 # Vendored XCPlite snapshot. Regenerate with tools/update_xcplite.sh.
-repo: https://github.com/RainerZ/XCPlite
-ref: dev-2.3.2
-commit: ec58a396f26bb4dd2423f4008551364e109dbfab
-date: 2026-10-07T10:05:12+02:00
-subject: Cleanup
+repo: https://github.com/vectorgrp/XCPlite
+ref: V2.3.2
+commit: da324776c9c2274d9a25cba890851ca1be4fc5ac
+date: 2026-10-14T19:11:27+02:00
+subject: persistence: keep file_pos at the descriptor in writeCalseg (#141)

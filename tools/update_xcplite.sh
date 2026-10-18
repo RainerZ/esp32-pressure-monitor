@@ -22,8 +22,8 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENDOR_DIR="${PROJECT_DIR}/xcplite"
 VERSION_FILE="${VENDOR_DIR}/VERSION"
 
-DEFAULT_REPO="https://github.com/RainerZ/XCPlite"
-DEFAULT_REF="dev-2.3.2"
+DEFAULT_REPO="https://github.com/vectorgrp/XCPlite"
+DEFAULT_REF="V2.3.2"
 
 # Public API headers, copied to xcplite/inc/
 # a2l.h / a2l.hpp are deliberately absent: they are only included behind
